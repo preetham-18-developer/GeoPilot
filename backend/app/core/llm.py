@@ -27,7 +27,8 @@ def get_llm():
                 return ChatGoogleGenerativeAI(
                     model=model,
                     google_api_key=gemini_key,
-                    temperature=0.1
+                    temperature=0.1,
+                    max_retries=5
                 )
             except Exception as e:
                 print(f"Failed to initialize {model}: {e}")
@@ -39,7 +40,8 @@ def get_llm():
             return ChatOpenAI(
                 model="gpt-4o-mini",
                 api_key=openai_key,
-                temperature=0.1
+                temperature=0.1,
+                max_retries=5
             )
         except Exception as e:
             print(f"Failed to initialize OpenAI LLM: {e}")

@@ -17,8 +17,28 @@ from app.agents.recommendation_sim import run_recommendation_sim
 from app.agents.content_coverage import run_content_coverage
 from app.agents.visibility_score import run_visibility_scoring
 from app.core.supabase import supabase_client
+from app.core.recommendation_engine import RecommendationEngineV2
+from app.core.hallucination_detector import HallucinationDetector
+from app.core.consistency_engine import KnowledgeConsistencyEngine
+from app.core.historical_tracker import HistoricalTracker
+from app.core.cache import invalidate_project_cache
 
 logger = logging.getLogger(__name__)
+
+def update_status(project_id: str, run_id: str, status: str, current_agent: str = None):
+    """Helper to update status and current_agent in both projects and analysis_runs tables."""
+    try:
+        supabase_client.table("analysis_runs").update({
+            "status": status,
+            "current_agent": current_agent
+        }).eq("id", run_id).execute()
+        
+        supabase_client.table("projects").update({
+            "status": status,
+            "current_agent": current_agent
+        }).eq("id", project_id).execute()
+    except Exception as e:
+        logger.error(f"Error updating run/project status for {project_id}/{run_id}: {e}")
 
 def log_agent_run(project_id: str, agent_name: str, status: str, input_tokens: int = 0, output_tokens: int = 0, processing_time: float = 0.0, error_message: str = None):
     """Helper to record agent run metrics in agent_runs table."""
@@ -37,6 +57,7 @@ def log_agent_run(project_id: str, agent_name: str, status: str, input_tokens: i
 
 # Timing and token tracking wrappers for LangGraph nodes
 def fact_extractor_node(state: AgentState):
+    update_status(state["project_id"], state["run_id"], "extracting", "Fact Extractor")
     start = time.time()
     try:
         res = run_fact_extractor(state)
@@ -49,6 +70,7 @@ def fact_extractor_node(state: AgentState):
         raise
 
 def verifier_node(state: AgentState):
+    update_status(state["project_id"], state["run_id"], "verifying", "Verifier")
     start = time.time()
     try:
         res = run_verifier(state)
@@ -61,6 +83,7 @@ def verifier_node(state: AgentState):
         raise
 
 def business_intelligence_node(state: AgentState):
+    update_status(state["project_id"], state["run_id"], "analyzing", "Business Intelligence")
     start = time.time()
     try:
         res = run_business_intelligence(state)
@@ -73,6 +96,7 @@ def business_intelligence_node(state: AgentState):
         raise
 
 def question_discovery_node(state: AgentState):
+    update_status(state["project_id"], state["run_id"], "analyzing", "Question Discovery")
     start = time.time()
     try:
         res = run_question_discovery(state)
@@ -85,6 +109,7 @@ def question_discovery_node(state: AgentState):
         raise
 
 def keyword_intelligence_node(state: AgentState):
+    update_status(state["project_id"], state["run_id"], "analyzing", "Keyword Agent")
     start = time.time()
     try:
         res = run_keyword_intelligence(state)
@@ -97,6 +122,7 @@ def keyword_intelligence_node(state: AgentState):
         raise
 
 def competitor_discovery_node(state: AgentState):
+    update_status(state["project_id"], state["run_id"], "analyzing", "Competitor Agent")
     start = time.time()
     try:
         res = run_competitor_discovery(state)
@@ -109,6 +135,7 @@ def competitor_discovery_node(state: AgentState):
         raise
 
 def content_agent_node(state: AgentState):
+    update_status(state["project_id"], state["run_id"], "analyzing", "Content Agent")
     start = time.time()
     try:
         res = run_content_agent(state)
@@ -121,6 +148,7 @@ def content_agent_node(state: AgentState):
         raise
 
 def report_compiler_node(state: AgentState):
+    update_status(state["project_id"], state["run_id"], "compiling", "Report Compiler")
     start = time.time()
     try:
         res = compile_report(state)
@@ -131,6 +159,7 @@ def report_compiler_node(state: AgentState):
         raise
 
 def qa_agent_node(state: AgentState):
+    update_status(state["project_id"], state["run_id"], "compiling", "Quality Assurance")
     start = time.time()
     try:
         res = run_qa_agent(state)
@@ -143,6 +172,7 @@ def qa_agent_node(state: AgentState):
         raise
 
 def entity_graph_node(state: AgentState):
+    update_status(state["project_id"], state["run_id"], "analyzing", "Entity Graph")
     start = time.time()
     try:
         res = run_entity_graph(state)
@@ -155,6 +185,7 @@ def entity_graph_node(state: AgentState):
         raise
 
 def recommendation_sim_node(state: AgentState):
+    update_status(state["project_id"], state["run_id"], "analyzing", "Recommendation Sim")
     start = time.time()
     try:
         res = run_recommendation_sim(state)
@@ -167,6 +198,7 @@ def recommendation_sim_node(state: AgentState):
         raise
 
 def content_coverage_node(state: AgentState):
+    update_status(state["project_id"], state["run_id"], "analyzing", "Content Coverage")
     start = time.time()
     try:
         res = run_content_coverage(state)
@@ -179,6 +211,7 @@ def content_coverage_node(state: AgentState):
         raise
 
 def visibility_scoring_node(state: AgentState):
+    update_status(state["project_id"], state["run_id"], "analyzing", "Visibility Score")
     start = time.time()
     try:
         res = run_visibility_scoring(state)
@@ -239,7 +272,7 @@ async def run_analysis_pipeline(project_id: str, run_id: str, website_url: str):
     logger.info(f"Triggering background Agent Pipeline for run {run_id}...")
     
     # Update analysis_runs table status to 'extracting'
-    supabase_client.table("analysis_runs").update({"status": "extracting"}).eq("id", run_id).execute()
+    update_status(project_id, run_id, "extracting", "Fact Extractor")
     
     start_run_time = time.time()
     
@@ -346,9 +379,6 @@ async def run_analysis_pipeline(project_id: str, run_id: str, website_url: str):
             "gap_analysis": [],
             "competitor_feature_matrix": {}
         }
-        
-        # Update run status to 'analyzing'
-        supabase_client.table("analysis_runs").update({"status": "analyzing"}).eq("id", run_id).execute()
         
         # 3. Run the LangGraph
         from app.core.supabase import _client_ctx
@@ -641,11 +671,103 @@ async def run_analysis_pipeline(project_id: str, run_id: str, website_url: str):
                 "checks": qa_report.get("checks", {})
             }).execute()
 
+        # I1. Record Longitudinal Historical Metrics
+        try:
+            logger.info("Computing longitudinal historical metrics...")
+            bp_bi = final_state.get("business_intelligence", {}) or {}
+            bp = {
+                "company_name": bp_bi.get("company_name", "Unknown"),
+                "industry": bp_bi.get("industry", "Unknown"),
+                "description": bp_bi.get("description", "NOT FOUND"),
+                "mission": bp_bi.get("mission", "NOT FOUND"),
+                "vision": bp_bi.get("vision", "NOT FOUND"),
+                "usp": bp_bi.get("usp", "NOT FOUND"),
+                "target_audience": bp_bi.get("target_audience", "NOT FOUND"),
+                "strengths": bp_bi.get("strengths", []),
+                "weaknesses": bp_bi.get("weaknesses", []),
+                "opportunities": bp_bi.get("opportunities", []),
+                "risks": bp_bi.get("risks", []),
+                "trust_signals": bp_bi.get("trust_signals", []),
+                "business_model": bp_bi.get("business_model", "NOT_FOUND"),
+                "ai_visibility_opportunities": bp_bi.get("ai_visibility_opportunities", []),
+                "pre_query_discovery": bp_bi.get("pre_query_discovery", {})
+            }
+
+            verified_facts_raw = final_state.get("verified_facts", []) or []
+            verified_facts = []
+            for vf in verified_facts_raw:
+                verified_facts.append({
+                    "fact_type": vf.get("fact_category", "general"),
+                    "fact_value": vf.get("fact_value", ""),
+                    "fact_key": vf.get("fact_key", ""),
+                    "evidence": vf.get("evidence_text", ""),
+                    "confidence_score": float(vf.get("confidence_score", 1.0)),
+                    "source_url": vf.get("source_url", "")
+                })
+
+            project_data_payload = {
+                "business_profile": bp,
+                "verified_facts": verified_facts,
+                "questions": final_state.get("questions", []) or [],
+                "keywords": final_state.get("keywords", []) or [],
+                "competitors": final_state.get("competitors", []) or [],
+                "content_coverage": final_state.get("content_coverage", []) or [],
+                "crawled_pages": final_state.get("crawled_pages", []) or [],
+                "content_opportunities": final_state.get("content_opportunities", []) or [],
+                "entity_nodes": final_state.get("entity_nodes", []) or [],
+                "gap_analysis": final_state.get("gap_analysis", []) or []
+            }
+
+            vis_score = final_state.get("ai_visibility_score", {}) or {}
+            visibility_val = float(vis_score.get("overall_score", 0.0))
+
+            sub_scores = vis_score.get("sub_scores", {}) or {}
+            coverage_val = float(sub_scores.get("content_coverage", 0.0))
+
+            try:
+                rec_engine = RecommendationEngineV2()
+                rec_res = rec_engine.run(project_data_payload)
+                recommendation_val = float(rec_res.get("overall_recommendation_score", 0.0))
+            except Exception as rec_err:
+                logger.warning(f"Error computing recommendation score for history: {rec_err}")
+                recommendation_val = 0.0
+
+            try:
+                det = HallucinationDetector()
+                det_res = det.detect(project_data_payload)
+                risk_score = float(det_res.get("hallucination_risk_score", 0.0))
+                hallucination_val = max(0.0, 100.0 - risk_score)
+            except Exception as det_err:
+                logger.warning(f"Error computing hallucination score for history: {det_err}")
+                hallucination_val = 100.0
+
+            try:
+                cons_engine = KnowledgeConsistencyEngine()
+                cons_res = cons_engine.run(project_data_payload)
+                consistency_val = float(cons_res.get("consistency_score", 0.0))
+            except Exception as cons_err:
+                logger.warning(f"Error computing consistency score for history: {cons_err}")
+                consistency_val = 100.0
+
+            supabase_client.table("historical_metrics").insert({
+                "project_id": project_id,
+                "run_id": run_id,
+                "visibility_score": round(visibility_val, 1),
+                "recommendation_score": round(recommendation_val, 1),
+                "hallucination_score": round(hallucination_val, 1),
+                "consistency_score": round(consistency_val, 1),
+                "coverage_score": round(coverage_val, 1)
+            }).execute()
+            logger.info(f"Successfully recorded historical metrics for project {project_id}, run {run_id}.")
+        except Exception as hist_err:
+            logger.error(f"Failed to save historical metrics: {hist_err}")
+
         # J. Update Project category/industry and status
         industry = bi_report.get("industry", "Other")
         supabase_client.table("projects").update({
             "industry": industry,
-            "status": "completed"
+            "status": "completed",
+            "current_agent": None
         }).eq("id", project_id).execute()
         
         # 5. Mark Run completed
@@ -654,8 +776,15 @@ async def run_analysis_pipeline(project_id: str, run_id: str, website_url: str):
             "status": "completed",
             "completed_at": "now()",
             "processing_time": total_duration,
-            "tokens_used": 13700 # Cumulative estimate
+            "tokens_used": 13700, # Cumulative estimate
+            "current_agent": None
         }).eq("id", run_id).execute()
+
+        # Invalidate project cache keys so that endpoints fetch fresh completed results
+        try:
+            invalidate_project_cache(project_id)
+        except Exception as cache_err:
+            logger.warning(f"Error invalidating cache after pipeline completion: {cache_err}")
         
         logger.info(f"Pipeline finished successfully for run {run_id}.")
         
@@ -666,8 +795,10 @@ async def run_analysis_pipeline(project_id: str, run_id: str, website_url: str):
             "status": "failed",
             "error_message": str(e),
             "completed_at": "now()",
-            "processing_time": total_duration
+            "processing_time": total_duration,
+            "current_agent": None
         }).eq("id", run_id).execute()
         supabase_client.table("projects").update({
-            "status": "failed"
+            "status": "failed",
+            "current_agent": None
         }).eq("id", project_id).execute()

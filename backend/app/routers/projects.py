@@ -3,6 +3,8 @@ from pydantic import BaseModel, HttpUrl
 from typing import List, Optional
 from app.core.supabase import supabase_client
 from app.core.dependencies import get_current_user
+from app.core.qdrant import delete_collection
+from app.crawler.spider import clear_embedding_cache
 import logging
 
 logger = logging.getLogger(__name__)
@@ -21,6 +23,7 @@ class ProjectOut(BaseModel):
     industry: Optional[str]
     status: str
     created_at: str
+    current_agent: Optional[str] = None
 
 @router.get("", response_model=List[ProjectOut])
 def list_projects(user_id: str = Depends(get_current_user)):
@@ -106,6 +109,19 @@ def delete_project(project_id: str, user_id: str = Depends(get_current_user)):
             
         # Delete project (cascades to all other tables due to foreign key setup!)
         supabase_client.table("projects").delete().eq("id", project_id).execute()
+        
+        # Delete Qdrant collection safely (no exceptions thrown)
+        collection_name = f"project_{project_id.replace('-', '_')}"
+        try:
+            delete_collection(collection_name)
+        except Exception as e:
+            logger.warning(f"Failed to delete Qdrant collection {collection_name}: {e}")
+            
+        # Clear embedding cache safely
+        try:
+            clear_embedding_cache()
+        except Exception as e:
+            logger.warning(f"Failed to clear embedding cache: {e}")
         
         # Log activity
         supabase_client.table("activity_logs").insert({

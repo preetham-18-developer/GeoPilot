@@ -21,6 +21,15 @@ def get_embedding_model():
             embedding_model = None
     return embedding_model
 
+def clear_embedding_cache():
+    """
+    Clears the loaded fastembed model from global memory.
+    """
+    global embedding_model
+    if embedding_model is not None:
+        logging.getLogger(__name__).info("Clearing fastembed embedding model cache.")
+        embedding_model = None
+
 try:
     from qdrant_client.http import models as qdrant_models
     from app.core.qdrant import qdrant_client, init_collection
@@ -131,33 +140,28 @@ class WebsiteSpider:
     # -------------------------------------------------------------------------
     # JavaScript Rendering via Playwright
     # -------------------------------------------------------------------------
-    async def _render_with_playwright(self, url: str) -> str:
+    async def _render_with_context(self, url: str, context: Any) -> str:
         """
-        Renders a URL using Playwright Chromium to execute JavaScript.
-        Returns the fully-rendered HTML after JS execution.
-        Uses domcontentloaded + explicit wait instead of networkidle to avoid
-        timeouts on SPAs that have continuous background network activity.
+        Renders a URL using a shared Playwright browser context.
+        Ensures page is properly closed in a finally block to prevent memory leaks.
         """
+        page = None
         try:
-            from playwright.async_api import async_playwright
-            async with async_playwright() as p:
-                browser = await p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
-                try:
-                    context = await browser.new_context(
-                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                        viewport={"width": 1280, "height": 900}
-                    )
-                    page = await context.new_page()
-                    await page.goto(url, wait_until="domcontentloaded", timeout=20000)
-                    # Wait for JS framework to render content (React/Vue/Angular hydration)
-                    await page.wait_for_timeout(JS_WAIT_MS)
-                    html = await page.content()
-                    return html
-                finally:
-                    await browser.close()
+            page = await context.new_page()
+            await page.goto(url, wait_until="domcontentloaded", timeout=20000)
+            # Wait for JS framework to render content (React/Vue/Angular hydration)
+            await page.wait_for_timeout(JS_WAIT_MS)
+            html = await page.content()
+            return html
         except Exception as e:
-            logger.error(f"Playwright render failed for {url}: {e}")
+            logger.error(f"Playwright render failed for {url} using shared context: {e}")
             return ""
+        finally:
+            if page:
+                try:
+                    await page.close()
+                except Exception as close_err:
+                    logger.warning(f"Error closing page: {close_err}")
 
     # -------------------------------------------------------------------------
     # Plain HTTP Fetch (fallback)
@@ -354,104 +358,145 @@ class WebsiteSpider:
         logger.info(f"Starting crawl for: {self.website_url}")
         supabase_client.table("projects").update({"status": "crawling"}).eq("id", self.project_id).execute()
 
-        # Check if Playwright is available
-        playwright_available = False
+        # Initialize Playwright Browser and Context once
+        playwright_instance = None
+        playwright_browser = None
+        playwright_context = None
         try:
             from playwright.async_api import async_playwright
-            playwright_available = True
-            logger.info("Playwright available — will render JavaScript.")
-        except ImportError:
-            logger.warning("Playwright not available — falling back to plain HTTP (SPAs may yield empty content).")
+            playwright_instance = await async_playwright().start()
+            playwright_browser = await playwright_instance.chromium.launch(
+                headless=True,
+                args=["--no-sandbox", "--disable-dev-shm-usage"]
+            )
+            playwright_context = await playwright_browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                viewport={"width": 1280, "height": 900}
+            )
+            logger.info("Playwright shared context initialized successfully.")
+        except Exception as e:
+            logger.warning(f"Playwright initialization failed: {e}. Falling back to plain HTTP.")
 
-        # Step 1: Discover URLs from sitemap
-        sitemap_urls = await self._fetch_sitemap_urls()
+        try:
+            # Step 1: Discover URLs from sitemap
+            sitemap_urls = await self._fetch_sitemap_urls()
 
-        # Step 2: Seed queue with sitemap URLs first, then the start URL
-        queue = []
-        if sitemap_urls:
-            # Normalize: ensure www. domains map to canonical form
-            normalized = []
-            for u in sitemap_urls:
-                parsed = urlparse(u)
-                netloc = parsed.netloc.lower()
-                # Use https:// version without www. for strict domain locking
-                canonical = f"https://{netloc}{parsed.path}".rstrip("/")
-                if self.is_internal_url(canonical):
-                    normalized.append(canonical)
-            queue = [(u, 1) for u in list(dict.fromkeys(normalized))[:MAX_PAGES]]
-            logger.info(f"Seeded {len(queue)} URLs from sitemap.")
-        else:
-            # Fall back to BFS from start URL
-            queue = [(self.clean_url(self.website_url), 1)]
-            logger.info("No sitemap found — starting BFS from root URL.")
+            # Step 2: Seed queue with sitemap URLs first, then the start URL
+            queue = []
+            if sitemap_urls:
+                # Normalize: ensure www. domains map to canonical form
+                normalized = []
+                for u in sitemap_urls:
+                    parsed = urlparse(u)
+                    netloc = parsed.netloc.lower()
+                    # Use https:// version without www. for strict domain locking
+                    canonical = f"https://{netloc}{parsed.path}".rstrip("/")
+                    if self.is_internal_url(canonical):
+                        normalized.append(canonical)
+                queue = [(u, 1) for u in list(dict.fromkeys(normalized))[:MAX_PAGES]]
+                logger.info(f"Seeded {len(queue)} URLs from sitemap.")
+            else:
+                # Fall back to BFS from start URL
+                queue = [(self.clean_url(self.website_url), 1)]
+                logger.info("No sitemap found — starting BFS from root URL.")
 
-        # Step 3: Process queue
-        while queue and self.pages_count < MAX_PAGES:
-            batch = []
-            while queue and len(batch) < CONCURRENT_LIMIT:
-                batch.append(queue.pop(0))
+            # Step 3: Process queue
+            while queue and self.pages_count < MAX_PAGES:
+                batch = []
+                while queue and len(batch) < CONCURRENT_LIMIT:
+                    batch.append(queue.pop(0))
 
-            tasks = [self._process_url(url, depth, queue, playwright_available) for url, depth in batch]
-            await asyncio.gather(*tasks)
+                tasks = [self._process_url(url, depth, queue, playwright_context) for url, depth in batch]
+                await asyncio.gather(*tasks, return_exceptions=True)
 
-        supabase_client.table("projects").update({"status": "completed"}).eq("id", self.project_id).execute()
+        finally:
+            # Prevent Chrome process leaks by closing everything
+            if playwright_context:
+                try:
+                    await playwright_context.close()
+                except Exception as e:
+                    logger.warning(f"Error closing playwright context: {e}")
+            if playwright_browser:
+                try:
+                    await playwright_browser.close()
+                except Exception as e:
+                    logger.warning(f"Error closing playwright browser: {e}")
+            if playwright_instance:
+                try:
+                    await playwright_instance.stop()
+                except Exception as e:
+                    logger.warning(f"Error stopping playwright instance: {e}")
+
         logger.info(f"Crawl complete. Processed {self.pages_count} pages from {self.website_url}.")
         return self.pages_count
 
-    async def _process_url(self, url: str, depth: int, queue: List, playwright_available: bool):
+    async def _process_url(self, url: str, depth: int, queue: List, playwright_context: Any):
         """Process a single URL: fetch → render → extract → save → discover links."""
-        async with self.semaphore:
-            if url in self.visited_urls or self.pages_count >= MAX_PAGES or depth > MAX_DEPTH:
-                return
+        try:
+            async with self.semaphore:
+                if url in self.visited_urls or self.pages_count >= MAX_PAGES or depth > MAX_DEPTH:
+                    return
 
-            # DOMAIN LOCK — reject anything not on the locked domain
-            if not self.is_internal_url(url):
-                logger.warning(f"Domain-lock rejected: {url}")
-                return
+                # DOMAIN LOCK — reject anything not on the locked domain
+                if not self.is_internal_url(url):
+                    logger.warning(f"Domain-lock rejected: {url}")
+                    return
 
-            self.visited_urls.add(url)
-            self.pages_count += 1
-            logger.info(f"Processing ({self.pages_count}/{MAX_PAGES}) depth={depth}: {url}")
+                self.visited_urls.add(url)
+                self.pages_count += 1
+                logger.info(f"Processing ({self.pages_count}/{MAX_PAGES}) depth={depth}: {url}")
 
-            # Fetch HTML
-            html = ""
-            if playwright_available:
-                html = await self._render_with_playwright(url)
-            if not html:
-                html = await self._fetch_plain(url)
-            if not html:
-                logger.warning(f"No content returned for: {url}")
-                return
+                # Fetch HTML
+                html = ""
+                if playwright_context:
+                    try:
+                        html = await self._render_with_context(url, playwright_context)
+                    except Exception as render_err:
+                        logger.error(f"Render failed for {url}: {render_err}")
+                if not html:
+                    html = await self._fetch_plain(url)
+                if not html:
+                    logger.warning(f"No content returned for: {url}")
+                    return
 
-            # If plain fetch got SPA shell, try Playwright
-            if playwright_available and self._is_spa_page(html):
-                logger.info(f"SPA detected at {url} — rendering with Playwright...")
-                rendered = await self._render_with_playwright(url)
-                if rendered:
-                    html = rendered
+                # If plain fetch got SPA shell, try Playwright
+                if playwright_context and self._is_spa_page(html):
+                    logger.info(f"SPA detected at {url} — rendering with Playwright...")
+                    try:
+                        rendered = await self._render_with_context(url, playwright_context)
+                        if rendered:
+                            html = rendered
+                    except Exception as render_err:
+                        logger.error(f"SPA render failed for {url}: {render_err}")
 
-            # Extract content
-            parsed = self._extract_text_from_html(html, url)
-            word_count = len(parsed["markdown_content"].split())
-            logger.info(f"Extracted {word_count} words from {url}")
+                # Extract content
+                parsed = self._extract_text_from_html(html, url)
+                word_count = len(parsed["markdown_content"].split())
+                logger.info(f"Extracted {word_count} words from {url}")
 
-            if word_count < 10:
-                logger.warning(f"Minimal content extracted from {url} — possible JS-only page or blocked.")
-                self._log_failure(url, "Minimal Content", f"Only {word_count} words extracted after rendering.")
+                if word_count < 10:
+                    logger.warning(f"Minimal content extracted from {url} — possible JS-only page or blocked.")
+                    self._log_failure(url, "Minimal Content", f"Only {word_count} words extracted after rendering.")
 
-            # Save to Supabase
-            page_id = await self._save_page(url, parsed)
+                # Save to Supabase
+                page_id = await self._save_page(url, parsed)
 
-            # Index in Qdrant
-            if page_id and parsed["markdown_content"]:
-                self._index_in_qdrant(page_id, url, parsed["markdown_content"])
+                # Index in Qdrant
+                if page_id and parsed["markdown_content"]:
+                    try:
+                        self._index_in_qdrant(page_id, url, parsed["markdown_content"])
+                    except Exception as q_err:
+                        logger.error(f"Qdrant indexing failed for {url}: {q_err}")
 
-            # Discover child links (for BFS fallback or additional pages)
-            if depth < MAX_DEPTH:
-                soup = BeautifulSoup(html, "html.parser")
-                for anchor in soup.find_all("a", href=True):
-                    href = anchor.get("href", "")
-                    absolute = urljoin(url, href)
-                    cleaned = self.clean_url(absolute)
-                    if self.is_internal_url(cleaned) and cleaned not in self.visited_urls:
-                        queue.append((cleaned, depth + 1))
+                # Discover child links (for BFS fallback or additional pages)
+                if depth < MAX_DEPTH:
+                    soup = BeautifulSoup(html, "html.parser")
+                    for anchor in soup.find_all("a", href=True):
+                        href = anchor.get("href", "")
+                        absolute = urljoin(url, href)
+                        cleaned = self.clean_url(absolute)
+                        if self.is_internal_url(cleaned) and cleaned not in self.visited_urls:
+                            queue.append((cleaned, depth + 1))
+        except Exception as e:
+            logger.error(f"Unexpected crawler page error on {url}: {e}")
+            self._log_failure(url, "Unexpected Crawler Exception", str(e))

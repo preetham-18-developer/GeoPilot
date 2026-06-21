@@ -5,6 +5,7 @@ from typing import Dict, Any, List
 from langchain_core.prompts import ChatPromptTemplate
 from app.core.llm import get_llm
 from app.agents.state import AgentState
+from app.core.scoring import compute_question_scores
 
 logger = logging.getLogger(__name__)
 
@@ -416,7 +417,7 @@ def run_question_discovery(state: AgentState) -> Dict[str, Any]:
         }
     ]
 
-    random.seed(42) # Ensure deterministic expansion
+    local_rng = random.Random(42) # Thread-safe local random generator
     
     # Phase A: Semantic combinator permutations
     iterations = 0
@@ -424,19 +425,19 @@ def run_question_discovery(state: AgentState) -> Dict[str, Any]:
     while len(expanded_questions) < 1050 and iterations < max_iterations:
         iterations += 1
         
-        group = random.choice(combinator_templates)
-        template = random.choice(group["templates"])
+        group = local_rng.choice(combinator_templates)
+        template = local_rng.choice(group["templates"])
         
-        fmt_persona = random.choice(personas)
-        fmt_product = random.choice(products)
-        fmt_service = random.choice(services)
-        fmt_topic = random.choice(topics)
-        fmt_tech = random.choice(technologies)
-        fmt_proc = random.choice(processes)
-        fmt_std = random.choice(standards)
-        fmt_reg = random.choice(regulations)
-        fmt_pain = random.choice(pain_points)
-        fmt_out = random.choice(outcomes)
+        fmt_persona = local_rng.choice(personas)
+        fmt_product = local_rng.choice(products)
+        fmt_service = local_rng.choice(services)
+        fmt_topic = local_rng.choice(topics)
+        fmt_tech = local_rng.choice(technologies)
+        fmt_proc = local_rng.choice(processes)
+        fmt_std = local_rng.choice(standards)
+        fmt_reg = local_rng.choice(regulations)
+        fmt_pain = local_rng.choice(pain_points)
+        fmt_out = local_rng.choice(outcomes)
         
         try:
             new_q = template.format(
@@ -456,30 +457,13 @@ def run_question_discovery(state: AgentState) -> Dict[str, Any]:
             if new_q_clean.lower() not in seen_texts:
                 seen_texts.add(new_q_clean.lower())
                 
-                rec_score = max(0, min(100, group["base_rec"] + random.randint(-5, 5)))
-                comm_score = max(0, min(100, group["base_comm"] + random.randint(-5, 5)))
-                int_score = max(0, min(100, group["base_int"] + random.randint(-5, 5)))
-                pri_score = max(0, min(100, group["base_pri"] + random.randint(-5, 5)))
-                
-                diff_est = "Hard" if rec_score >= 75 else "Medium" if rec_score >= 50 else "Easy"
-                opp_est = "High" if pri_score >= 75 else "Medium" if pri_score >= 50 else "Low"
-                priority_val = "High" if pri_score >= 75 else "Medium" if pri_score >= 50 else "Low"
-                
                 answer = f"Based on verified business facts, this organization provides {fmt_product} (focusing on {fmt_service}) built on {fmt_tech}. This solves {fmt_pain} to help {fmt_persona} achieve {fmt_out}."
                 
                 expanded_questions.append({
                     "question": new_q_clean,
                     "question_type": group["type"],
                     "intent": group["intent"],
-                    "confidence_score": round(random.uniform(0.85, 1.0), 2),
-                    "priority": priority_val,
-                    "recommended_answer": answer,
-                    "recommendation_score": rec_score,
-                    "commercial_score": comm_score,
-                    "intent_score": int_score,
-                    "priority_score": pri_score,
-                    "difficulty_estimate": diff_est,
-                    "opportunity_estimate": opp_est
+                    "recommended_answer": answer
                 })
         except Exception:
             continue
@@ -508,39 +492,35 @@ def run_question_discovery(state: AgentState) -> Dict[str, Any]:
         iter_b = 0
         while len(expanded_questions) < 1050 and iter_b < 5000 and base_questions:
             iter_b += 1
-            seed_item = random.choice(base_questions)
+            seed_item = local_rng.choice(base_questions)
             clean_q = seed_item["question"].rstrip("?")
-            modifier = random.choice(search_templates)
+            modifier = local_rng.choice(search_templates)
             new_q = modifier.format(q=clean_q)
             
             new_q_clean = new_q.strip().replace("  ", " ")
             if new_q_clean.lower() not in seen_texts:
                 seen_texts.add(new_q_clean.lower())
                 
-                # Copy and adjust scores slightly
-                rec_score = max(0, min(100, seed_item["recommendation_score"] + random.randint(-5, 5)))
-                comm_score = max(0, min(100, seed_item["commercial_score"] + random.randint(-5, 5)))
-                int_score = max(0, min(100, seed_item["intent_score"] + random.randint(-5, 5)))
-                pri_score = max(0, min(100, seed_item["priority_score"] + random.randint(-5, 5)))
-                
-                diff_est = "Hard" if rec_score >= 75 else "Medium" if rec_score >= 50 else "Easy"
-                opp_est = "High" if pri_score >= 75 else "Medium" if pri_score >= 50 else "Low"
-                priority_val = "High" if pri_score >= 75 else "Medium" if pri_score >= 50 else "Low"
-                
                 expanded_questions.append({
                     "question": new_q_clean,
                     "question_type": seed_item["question_type"],
                     "intent": seed_item["intent"],
-                    "confidence_score": round(random.uniform(0.85, 1.0), 2),
-                    "priority": priority_val,
-                    "recommended_answer": seed_item["recommended_answer"],
-                    "recommendation_score": rec_score,
-                    "commercial_score": comm_score,
-                    "intent_score": int_score,
-                    "priority_score": pri_score,
-                    "difficulty_estimate": diff_est,
-                    "opportunity_estimate": opp_est
+                    "recommended_answer": seed_item["recommended_answer"]
                 })
 
-    logger.info(f"Question Discovery finished. Expanded seeds to {len(expanded_questions)} questions.")
-    return {"questions": expanded_questions}
+    # Ensure EVERY single question (including initial seeds) is scored deterministically
+    final_questions = []
+    crawled_pages = state.get("crawled_pages", [])
+    for item in expanded_questions:
+        scores = compute_question_scores(
+            item["question"],
+            item["question_type"],
+            item["intent"],
+            bi,
+            crawled_pages
+        )
+        item.update(scores)
+        final_questions.append(item)
+
+    logger.info(f"Question Discovery finished. Expanded seeds to {len(final_questions)} questions.")
+    return {"questions": final_questions}

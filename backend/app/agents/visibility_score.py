@@ -4,6 +4,7 @@ from typing import Dict, Any, List
 from langchain_core.prompts import ChatPromptTemplate
 from app.core.llm import get_llm
 from app.agents.state import AgentState
+from app.core.scoring import compute_visibility_scores
 
 logger = logging.getLogger(__name__)
 
@@ -131,13 +132,28 @@ class VisibilityScoreAgent:
             }
 
 def run_visibility_scoring(state: AgentState) -> Dict[str, Any]:
-    """Node function executing scoring, gaps, and recommendations."""
+    """Node function executing scoring, gaps, and recommendations with deterministic post-processing."""
     logger.info("Running AI Visibility Scoring Node...")
     agent = VisibilityScoreAgent()
     res = agent.analyze(state.get("business_intelligence", {}), state.get("verified_facts", []))
+    
+    raw_scores = res.get("visibility_score", {})
+    try:
+        scored_vis = compute_visibility_scores(
+            raw_scores,
+            state.get("crawled_pages", []),
+            state.get("verified_facts", []),
+            state.get("questions", []),
+            state.get("keywords", []),
+            state.get("business_intelligence", {})
+        )
+    except Exception as e:
+        logger.warning(f"Error computing visibility scores deterministically: {e}")
+        scored_vis = raw_scores
+
     logger.info("AI Visibility Scoring Agent finished.")
     return {
-        "ai_visibility_score": res.get("visibility_score", {}),
+        "ai_visibility_score": scored_vis,
         "gap_analysis": res.get("gap_analysis", []),
         "content_opportunities": res.get("content_opportunities", [])
     }

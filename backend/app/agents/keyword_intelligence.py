@@ -5,6 +5,7 @@ from typing import Dict, Any, List
 from langchain_core.prompts import ChatPromptTemplate
 from app.core.llm import get_llm
 from app.agents.state import AgentState
+from app.core.scoring import compute_keyword_scores
 
 logger = logging.getLogger(__name__)
 
@@ -182,7 +183,7 @@ def run_keyword_intelligence(state: AgentState) -> Dict[str, Any]:
     graph_entities = [e for e in graph_entities if e and e.upper() != "NOT_FOUND"]
 
     # Semantic Keyword Builder Expansion Rules
-    random.seed(42) # Ensure deterministic expansion
+    local_rng = random.Random(42) # Thread-safe local random generator
     
     combiner_patterns = [
         ("{product} for {persona}", "Role", "commercial", "Verified Facts | Authority Sources"),
@@ -213,19 +214,19 @@ def run_keyword_intelligence(state: AgentState) -> Dict[str, Any]:
     while len(expanded_keywords) < 5050 and iterations < max_iterations:
         iterations += 1
         
-        pattern, kw_type, kw_intent, kw_source = random.choice(combiner_patterns)
+        pattern, kw_type, kw_intent, kw_source = local_rng.choice(combiner_patterns)
         
-        fmt_persona = random.choice(personas)
-        fmt_product = random.choice(products)
-        fmt_service = random.choice(services)
-        fmt_topic = random.choice(topics)
-        fmt_tech = random.choice(technologies)
-        fmt_proc = random.choice(processes)
-        fmt_std = random.choice(standards)
-        fmt_reg = random.choice(regulations)
-        fmt_pain = random.choice(pain_points)
-        fmt_out = random.choice(outcomes)
-        fmt_entity = random.choice(graph_entities) if graph_entities else "entity"
+        fmt_persona = local_rng.choice(personas)
+        fmt_product = local_rng.choice(products)
+        fmt_service = local_rng.choice(services)
+        fmt_topic = local_rng.choice(topics)
+        fmt_tech = local_rng.choice(technologies)
+        fmt_proc = local_rng.choice(processes)
+        fmt_std = local_rng.choice(standards)
+        fmt_reg = local_rng.choice(regulations)
+        fmt_pain = local_rng.choice(pain_points)
+        fmt_out = local_rng.choice(outcomes)
+        fmt_entity = local_rng.choice(graph_entities) if graph_entities else "entity"
         
         try:
             new_kw = pattern.format(
@@ -246,19 +247,11 @@ def run_keyword_intelligence(state: AgentState) -> Dict[str, Any]:
             if new_kw_clean.lower() not in seen_keywords:
                 seen_keywords.add(new_kw_clean.lower())
                 
-                priority_val = "High" if kw_type in ["Primary", "Commercial", "Opportunity"] else "Medium" if kw_type in ["Role", "Problem", "Outcome", "AI Search"] else "Low"
-                diff_val = "Hard" if kw_type in ["Primary", "Authority", "Commercial"] else "Medium" if kw_type in ["Long Tail", "Semantic", "Trend"] else "Easy"
-                opp_val = "High" if priority_val == "High" else "Medium" if priority_val == "Medium" else "Low"
-                
                 expanded_keywords.append({
                     "keyword": new_kw_clean,
                     "keyword_type": kw_type,
                     "intent": kw_intent,
                     "cluster": fmt_topic + " Setup" if "setup" in new_kw_clean.lower() or "implement" in new_kw_clean.lower() else fmt_topic + " Solutions",
-                    "confidence_score": round(random.uniform(0.80, 1.0), 2),
-                    "priority": priority_val,
-                    "difficulty_estimate": diff_val,
-                    "opportunity_estimate": opp_val,
                     "source": kw_source
                 })
         except Exception:
@@ -299,18 +292,27 @@ def run_keyword_intelligence(state: AgentState) -> Dict[str, Any]:
                     if new_kw_clean.lower() not in seen_keywords:
                         seen_keywords.add(new_kw_clean.lower())
                         
-                        conf = max(0.6, min(1.0, seed_item["confidence_score"] - random.uniform(0.01, 0.15)))
                         expanded_keywords.append({
                             "keyword": new_kw_clean,
                             "keyword_type": "Long Tail" if " " in new_kw_clean else "Short Tail",
                             "intent": seed_item["intent"],
                             "cluster": seed_item["cluster"],
-                            "confidence_score": round(conf, 2),
-                            "priority": seed_item["priority"],
-                            "difficulty_estimate": seed_item["difficulty_estimate"],
-                            "opportunity_estimate": seed_item["opportunity_estimate"],
                             "source": seed_item["source"]
                         })
 
-    logger.info(f"V3 Keyword Intelligence finished. Expanded seeds to {len(expanded_keywords)} keywords.")
-    return {"keywords": expanded_keywords}
+    # Ensure EVERY single keyword is scored deterministically
+    final_keywords = []
+    for item in expanded_keywords:
+        scores = compute_keyword_scores(
+            item["keyword"],
+            item["keyword_type"],
+            item["intent"],
+            bi,
+            state.get("crawled_pages", []),
+            state.get("entity_nodes", [])
+        )
+        item.update(scores)
+        final_keywords.append(item)
+
+    logger.info(f"V3 Keyword Intelligence finished. Expanded seeds to {len(final_keywords)} keywords.")
+    return {"keywords": final_keywords}

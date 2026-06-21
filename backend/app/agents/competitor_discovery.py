@@ -4,6 +4,7 @@ from typing import Dict, Any, List
 from langchain_core.prompts import ChatPromptTemplate
 from app.core.llm import get_llm
 from app.agents.state import AgentState
+from app.core.scoring import compute_competitor_scores
 
 logger = logging.getLogger(__name__)
 
@@ -101,9 +102,22 @@ class CompetitorDiscoveryAgent:
             return {"competitors": [], "feature_matrix": {"features": [], "unique_competitor_features": [], "missing_client_features": []}}
 
 def run_competitor_discovery(state: AgentState) -> Dict[str, Any]:
-    """Node function that executes competitor discovery."""
+    """Node function that executes competitor discovery and post-processes scores deterministically."""
     logger.info("Running Competitor Discovery Node...")
     agent = CompetitorDiscoveryAgent()
     res = agent.discover_competitors(state.get("verified_facts", []))
-    logger.info(f"Competitor Discovery finished. Discovered {len(res.get('competitors', []))} competitors.")
-    return {"competitors": res.get("competitors", []), "competitor_feature_matrix": res.get("feature_matrix", {})}
+    
+    competitors = res.get("competitors", [])
+    feature_matrix = res.get("feature_matrix", {})
+    bi = state.get("business_intelligence", {})
+    
+    # Calculate deterministic similarity and match scores
+    for comp in competitors:
+        try:
+            scores = compute_competitor_scores(comp, feature_matrix, bi)
+            comp.update(scores)
+        except Exception as e:
+            logger.warning(f"Error computing competitor scores for {comp.get('competitor_name', 'Unknown')}: {e}")
+            
+    logger.info(f"Competitor Discovery finished. Discovered and scored {len(competitors)} competitors.")
+    return {"competitors": competitors, "competitor_feature_matrix": feature_matrix}

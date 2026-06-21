@@ -48,6 +48,9 @@ async def supabase_client_middleware(request: Request, call_next):
 
 
 # Setup CORS middleware
+from app.core.middleware import PerformanceMetricsMiddleware
+app.add_middleware(PerformanceMetricsMiddleware)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # For production, restrict this
