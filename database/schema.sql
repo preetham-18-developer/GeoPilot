@@ -702,3 +702,163 @@ CREATE INDEX IF NOT EXISTS idx_recommendation_simulations_v2_project_id ON publi
 CREATE INDEX IF NOT EXISTS idx_hallucination_reports_project_id ON public.hallucination_reports(project_id);
 CREATE INDEX IF NOT EXISTS idx_knowledge_consistency_reports_project_id ON public.knowledge_consistency_reports(project_id);
 
+-- =========================================================================
+-- PHASE 6: ADVANCED ANALYTICS & EXPLAINABILITY LAYER TABLES
+-- =========================================================================
+
+-- Extend historical_metrics with Phase 6 columns
+ALTER TABLE public.historical_metrics 
+  ADD COLUMN IF NOT EXISTS grounding_score float DEFAULT 100.0,
+  ADD COLUMN IF NOT EXISTS question_quality float DEFAULT 0.0,
+  ADD COLUMN IF NOT EXISTS keyword_quality float DEFAULT 0.0;
+
+-- Regression Reports Table
+CREATE TABLE IF NOT EXISTS public.regression_reports (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id uuid REFERENCES public.projects(id) ON DELETE CASCADE not null,
+  run_id uuid REFERENCES public.analysis_runs(id) ON DELETE CASCADE not null,
+  metric_name text NOT NULL,
+  previous_value float NOT NULL,
+  current_value float NOT NULL,
+  drop_value float NOT NULL,
+  severity text NOT NULL, -- 'LOW', 'MEDIUM', 'HIGH'
+  reason text NOT NULL,
+  impact text NOT NULL,
+  recommended_fix text NOT NULL,
+  created_at timestamptz DEFAULT now() not null
+);
+CREATE INDEX IF NOT EXISTS idx_regression_reports_project_id ON public.regression_reports(project_id);
+
+-- Root Cause Reports Table
+CREATE TABLE IF NOT EXISTS public.root_cause_reports (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id uuid REFERENCES public.projects(id) ON DELETE CASCADE not null,
+  run_id uuid REFERENCES public.analysis_runs(id) ON DELETE CASCADE not null,
+  metric_name text NOT NULL,
+  score_change float NOT NULL,
+  severity text NOT NULL, -- 'LOW', 'MEDIUM', 'HIGH'
+  cause text NOT NULL,
+  affected_agents text[] NOT NULL,
+  repair_suggestions text[] NOT NULL,
+  created_at timestamptz DEFAULT now() not null
+);
+CREATE INDEX IF NOT EXISTS idx_root_cause_reports_project_id ON public.root_cause_reports(project_id);
+
+-- Query Coverage Heatmaps Table
+CREATE TABLE IF NOT EXISTS public.query_coverage_heatmaps (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id uuid REFERENCES public.projects(id) ON DELETE CASCADE not null,
+  run_id uuid REFERENCES public.analysis_runs(id) ON DELETE CASCADE not null,
+  category_scores jsonb NOT NULL, -- {"Direct": 90.0, "Problem": 85.0, ...}
+  missing_categories text[] DEFAULT '{}',
+  weak_categories text[] DEFAULT '{}',
+  strong_categories text[] DEFAULT '{}',
+  priorities jsonb DEFAULT '{}', -- {"Direct": "MEDIUM", "Problem": "HIGH", ...}
+  created_at timestamptz DEFAULT now() not null
+);
+CREATE INDEX IF NOT EXISTS idx_query_coverage_heatmaps_project_id ON public.query_coverage_heatmaps(project_id);
+
+-- Content Opportunities V2 Table
+CREATE TABLE IF NOT EXISTS public.content_opportunities_v2 (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id uuid REFERENCES public.projects(id) ON DELETE CASCADE not null,
+  run_id uuid REFERENCES public.analysis_runs(id) ON DELETE CASCADE not null,
+  category text NOT NULL,
+  current_coverage float NOT NULL,
+  opportunity text NOT NULL,
+  recommended_actions text[] DEFAULT '{}',
+  priority text NOT NULL, -- 'HIGH', 'MEDIUM', 'LOW'
+  impact_score integer NOT NULL,
+  effort_score integer NOT NULL,
+  created_at timestamptz DEFAULT now() not null
+);
+CREATE INDEX IF NOT EXISTS idx_content_opps_v2_project_id ON public.content_opportunities_v2(project_id);
+
+-- Enable RLS
+ALTER TABLE public.regression_reports ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.root_cause_reports ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.query_coverage_heatmaps ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.content_opportunities_v2 ENABLE ROW LEVEL SECURITY;
+
+-- Policies
+CREATE POLICY "Users can view their own regression reports" ON public.regression_reports
+  FOR SELECT USING (EXISTS (
+    SELECT 1 FROM public.projects 
+    WHERE projects.id = regression_reports.project_id AND projects.user_id = current_user_id()
+  ));
+CREATE POLICY "Agents can insert regression reports" ON public.regression_reports
+  FOR INSERT WITH CHECK (EXISTS (
+    SELECT 1 FROM public.projects WHERE projects.id = regression_reports.project_id
+  ));
+CREATE POLICY "Agents can update regression reports" ON public.regression_reports
+  FOR UPDATE USING (EXISTS (
+    SELECT 1 FROM public.projects WHERE projects.id = regression_reports.project_id
+  )) WITH CHECK (EXISTS (
+    SELECT 1 FROM public.projects WHERE projects.id = regression_reports.project_id
+  ));
+CREATE POLICY "Agents can delete regression reports" ON public.regression_reports
+  FOR DELETE USING (EXISTS (
+    SELECT 1 FROM public.projects WHERE projects.id = regression_reports.project_id
+  ));
+
+CREATE POLICY "Users can view their own root cause reports" ON public.root_cause_reports
+  FOR SELECT USING (EXISTS (
+    SELECT 1 FROM public.projects 
+    WHERE projects.id = root_cause_reports.project_id AND projects.user_id = current_user_id()
+  ));
+CREATE POLICY "Agents can insert root cause reports" ON public.root_cause_reports
+  FOR INSERT WITH CHECK (EXISTS (
+    SELECT 1 FROM public.projects WHERE projects.id = root_cause_reports.project_id
+  ));
+CREATE POLICY "Agents can update root cause reports" ON public.root_cause_reports
+  FOR UPDATE USING (EXISTS (
+    SELECT 1 FROM public.projects WHERE projects.id = root_cause_reports.project_id
+  )) WITH CHECK (EXISTS (
+    SELECT 1 FROM public.projects WHERE projects.id = root_cause_reports.project_id
+  ));
+CREATE POLICY "Agents can delete root cause reports" ON public.root_cause_reports
+  FOR DELETE USING (EXISTS (
+    SELECT 1 FROM public.projects WHERE projects.id = root_cause_reports.project_id
+  ));
+
+CREATE POLICY "Users can view their own query coverage heatmaps" ON public.query_coverage_heatmaps
+  FOR SELECT USING (EXISTS (
+    SELECT 1 FROM public.projects 
+    WHERE projects.id = query_coverage_heatmaps.project_id AND projects.user_id = current_user_id()
+  ));
+CREATE POLICY "Agents can insert query coverage heatmaps" ON public.query_coverage_heatmaps
+  FOR INSERT WITH CHECK (EXISTS (
+    SELECT 1 FROM public.projects WHERE projects.id = query_coverage_heatmaps.project_id
+  ));
+CREATE POLICY "Agents can update query coverage heatmaps" ON public.query_coverage_heatmaps
+  FOR UPDATE USING (EXISTS (
+    SELECT 1 FROM public.projects WHERE projects.id = query_coverage_heatmaps.project_id
+  )) WITH CHECK (EXISTS (
+    SELECT 1 FROM public.projects WHERE projects.id = query_coverage_heatmaps.project_id
+  ));
+CREATE POLICY "Agents can delete query coverage heatmaps" ON public.query_coverage_heatmaps
+  FOR DELETE USING (EXISTS (
+    SELECT 1 FROM public.projects WHERE projects.id = query_coverage_heatmaps.project_id
+  ));
+
+CREATE POLICY "Users can view their own content opportunities v2" ON public.content_opportunities_v2
+  FOR SELECT USING (EXISTS (
+    SELECT 1 FROM public.projects 
+    WHERE projects.id = content_opportunities_v2.project_id AND projects.user_id = current_user_id()
+  ));
+CREATE POLICY "Agents can insert content opportunities v2" ON public.content_opportunities_v2
+  FOR INSERT WITH CHECK (EXISTS (
+    SELECT 1 FROM public.projects WHERE projects.id = content_opportunities_v2.project_id
+  ));
+CREATE POLICY "Agents can update content opportunities v2" ON public.content_opportunities_v2
+  FOR UPDATE USING (EXISTS (
+    SELECT 1 FROM public.projects WHERE projects.id = content_opportunities_v2.project_id
+  )) WITH CHECK (EXISTS (
+    SELECT 1 FROM public.projects WHERE projects.id = content_opportunities_v2.project_id
+  ));
+CREATE POLICY "Agents can delete content opportunities v2" ON public.content_opportunities_v2
+  FOR DELETE USING (EXISTS (
+    SELECT 1 FROM public.projects WHERE projects.id = content_opportunities_v2.project_id
+  ));
+
+

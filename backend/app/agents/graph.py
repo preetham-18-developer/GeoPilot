@@ -22,6 +22,11 @@ from app.core.hallucination_detector import HallucinationDetector
 from app.core.consistency_engine import KnowledgeConsistencyEngine
 from app.core.historical_tracker import HistoricalTracker
 from app.core.cache import invalidate_project_cache
+from app.core.explainability_engine import ExplainabilityEngine
+from app.core.regression_engine import RegressionEngine
+from app.core.root_cause_engine import RootCauseEngine
+from app.core.coverage_heatmap_engine import CoverageHeatmapEngine
+from app.core.opportunity_engine_v2 import OpportunityEngineV2
 
 logger = logging.getLogger(__name__)
 
@@ -749,6 +754,16 @@ async def run_analysis_pipeline(project_id: str, run_id: str, website_url: str):
                 logger.warning(f"Error computing consistency score for history: {cons_err}")
                 consistency_val = 100.0
 
+            # Calculate Phase 6 scores
+            grounding_val = sum(float(f.get("verification_score", 0.0)) for f in verified_facts) / len(verified_facts) if verified_facts else 100.0
+            
+            q_list = project_data_payload.get("questions") or []
+            question_quality_val = sum(float(q.get("priority_score", 0.0)) for q in q_list) / len(q_list) if q_list else 0.0
+
+            kw_list = project_data_payload.get("keywords") or []
+            keyword_quality_val = sum(float(k.get("recommendation_value", 0.0)) for k in kw_list) / len(kw_list) if kw_list else 0.0
+
+            # Save historical metrics record
             supabase_client.table("historical_metrics").insert({
                 "project_id": project_id,
                 "run_id": run_id,
@@ -756,11 +771,48 @@ async def run_analysis_pipeline(project_id: str, run_id: str, website_url: str):
                 "recommendation_score": round(recommendation_val, 1),
                 "hallucination_score": round(hallucination_val, 1),
                 "consistency_score": round(consistency_val, 1),
-                "coverage_score": round(coverage_val, 1)
+                "coverage_score": round(coverage_val, 1),
+                "grounding_score": round(grounding_val, 1),
+                "question_quality": round(question_quality_val, 1),
+                "keyword_quality": round(keyword_quality_val, 1)
             }).execute()
             logger.info(f"Successfully recorded historical metrics for project {project_id}, run {run_id}.")
+
+            # Execute Phase 6 Analytics Engines
+            current_scores = {
+                "visibility_score": visibility_val,
+                "recommendation_score": recommendation_val,
+                "hallucination_score": hallucination_val,
+                "consistency_score": consistency_val,
+                "coverage_score": coverage_val,
+                "grounding_score": grounding_val,
+                "question_quality": question_quality_val,
+                "keyword_quality": keyword_quality_val
+            }
+
+            try:
+                # 1. Regressions
+                reg_eng = RegressionEngine()
+                reg_eng.run(project_id, run_id, current_scores)
+                
+                # 2. Root Causes
+                rc_eng = RootCauseEngine()
+                rc_eng.run(project_id, run_id, current_scores)
+                
+                # 3. Heatmap
+                hm_eng = CoverageHeatmapEngine()
+                heatmap_data = hm_eng.run(project_id, run_id, project_data_payload)
+                
+                # 4. Opportunities V2
+                opp_eng = OpportunityEngineV2()
+                opp_eng.run(project_id, run_id, heatmap_data)
+                
+                logger.info(f"Phase 6 Advanced Analytics engines executed successfully for project {project_id}.")
+            except Exception as eng_err:
+                logger.error(f"Error running Phase 6 Advanced Analytics engines: {eng_err}")
+
         except Exception as hist_err:
-            logger.error(f"Failed to save historical metrics: {hist_err}")
+            logger.error(f"Failed to save historical metrics or run analytics: {hist_err}")
 
         # J. Update Project category/industry and status
         industry = bi_report.get("industry", "Other")

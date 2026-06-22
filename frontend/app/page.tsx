@@ -16,6 +16,7 @@ import RecommendationIntelligenceTab from "./components/RecommendationIntelligen
 import RealityCheckerTab from "./components/RealityCheckerTab";
 import CompetitorBenchmarkTab from "./components/CompetitorBenchmarkTab";
 import LongitudinalTrackerTab from "./components/LongitudinalTrackerTab";
+import AdvancedAnalyticsTab from "./components/AdvancedAnalyticsTab";
 
 const API_BASE = "http://localhost:8000/api/v1";
 
@@ -1064,6 +1065,7 @@ export default function AivopDashboard() {
                 { key: "reality_check", label: "🎯 Reality Checker" },
                 { key: "benchmark", label: "📊 Competitor Benchmark" },
                 { key: "tracker", label: "📈 Longitudinal Tracker" },
+                { key: "analytics", label: "📊 Advanced Analytics" },
               ].map(({ key, label }) => (
                 <button
                   key={key}
@@ -1245,6 +1247,12 @@ export default function AivopDashboard() {
 
                 {activeTab === "tracker" && selectedProjectId && (
                   <LongitudinalTrackerTab
+                    projectId={selectedProjectId}
+                  />
+                )}
+
+                {activeTab === "analytics" && selectedProjectId && (
+                  <AdvancedAnalyticsTab
                     projectId={selectedProjectId}
                   />
                 )}
