@@ -113,6 +113,8 @@ async def run_regression_test():
         
         # Verify run status and grounding score
         run_resp = test_client.table("analysis_runs").select("*").eq("id", run_id).execute()
+        if not run_resp.data:
+            raise AssertionError(f"Test 1: analysis_run {run_id} not found — run may have been deleted by a failed grounding abort.")
         run_data = run_resp.data[0]
         
         logger.info(f"Test 1 Run Status: {run_data['status']}")

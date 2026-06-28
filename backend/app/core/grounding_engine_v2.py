@@ -158,11 +158,10 @@ class GroundingEngineV2:
                 if c and not is_generic_placeholder(c):
                     entities_to_check.append(("Certification", c))
                     
-        # Competitors
-        for comp in competitors:
-            c_name = comp.get("competitor_name") or comp.get("name")
-            if c_name and not is_generic_placeholder(c_name):
-                entities_to_check.append(("Competitor", c_name))
+        # NOTE: Competitors are intentionally excluded from grounding checks.
+        # Competitors are external companies discovered by AI inference — they will
+        # NEVER appear on the target website's own crawled pages, so including
+        # them in grounding would always reduce the score unfairly.
                 
         # Keywords and Questions are bypassed in grounding checks as they are search queries, not factual claims.
                 
@@ -276,7 +275,8 @@ class GroundingEngineV2:
         domain_consistency_score = 100.0 - (domain_conflicts_count * 25.0)
         domain_consistency_score = max(0.0, min(100.0, domain_consistency_score))
         
-        overall_status = "PASSED" if (grounding_score >= 95.0 and domain_consistency_score >= 90.0) else "FAILED_GROUNDING"
+        # Threshold: 70% grounding required (services/programs not always on landing page)
+        overall_status = "PASSED" if (grounding_score >= 70.0 and domain_consistency_score >= 90.0) else "FAILED_GROUNDING"
         
         for check in details:
             logger.error(f"[GroundingEngineV2 Check] {check['status']}: {check['category']} -> {check['entity']} (Snippet: {check['evidence_snippet']})")
