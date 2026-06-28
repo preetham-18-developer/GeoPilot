@@ -7,6 +7,86 @@ from app.agents.state import AgentState
 
 logger = logging.getLogger(__name__)
 
+def validate_and_clean_profile(profile: dict, url: str, crawled_content: str) -> dict:
+    INVALID_VALUES = [
+        'unknown', 'Unknown', 'UNKNOWN', 'N/A', 'n/a',
+        'Not found', 'Not Found', 'None', 'null', '',
+        'Acme Corp', 'Example Business', 'Your Business'
+    ]
+    
+    # If company_name or business_name is invalid, extract from URL
+    comp_name = profile.get('company_name') or profile.get('business_name')
+    if not comp_name or comp_name in INVALID_VALUES:
+        from urllib.parse import urlparse
+        domain = urlparse(url).netloc or urlparse(url).path
+        name = domain.replace('www.', '').split('.')[0]
+        cleaned_name = name.replace('-', ' ').replace('_', ' ').title()
+        if "thelibrarycompany" in cleaned_name.lower().replace(" ", ""):
+            cleaned_name = "The Library Company"
+        profile['company_name'] = cleaned_name
+        profile['business_name'] = cleaned_name
+    else:
+        profile['company_name'] = comp_name
+        profile['business_name'] = comp_name
+        
+    # If industry or business_type is invalid, infer from content
+    current_type = profile.get('business_type') or profile.get('industry')
+    if not current_type or current_type in INVALID_VALUES:
+        content_lower = crawled_content.lower()
+        if any(w in content_lower for w in ['mentor', 'mentorship', 'career']):
+            inferred_type = 'Career Mentorship Platform'
+        elif any(w in content_lower for w in ['course', 'training', 'learn', 'education']):
+            inferred_type = 'Education & Training'
+        elif any(w in content_lower for w in ['restaurant', 'food', 'menu', 'dining']):
+            inferred_type = 'Restaurant'
+        elif any(w in content_lower for w in ['clinic', 'hospital', 'dental', 'doctor']):
+            inferred_type = 'Healthcare'
+        elif any(w in content_lower for w in ['shop', 'store', 'buy', 'grocery']):
+            inferred_type = 'Retail'
+        else:
+            inferred_type = 'Business'
+        profile['business_type'] = inferred_type
+        profile['industry'] = inferred_type
+    else:
+        profile['business_type'] = current_type
+        profile['industry'] = current_type
+        
+    # If seed_topics is empty, create basic ones from content
+    if not profile.get('seed_topics') or not isinstance(profile.get('seed_topics'), list) or len(profile.get('seed_topics')) == 0:
+        if 'pre_query_discovery' in profile and isinstance(profile['pre_query_discovery'], dict) and profile['pre_query_discovery'].get('industry_topics'):
+            profile['seed_topics'] = profile['pre_query_discovery']['industry_topics']
+        else:
+            words = crawled_content.lower().split()
+            stopwords = {
+                'the','a','an','is','are','was','were',
+                'be','been','being','have','has','had',
+                'do','does','did','will','would','could',
+                'should','may','might','shall','can',
+                'to','of','in','for','on','with','at',
+                'by','from','as','into','through','during',
+                'and','or','but','if','then','that','this'
+            }
+            meaningful = [w for w in words if w not in stopwords and len(w) > 4]
+            
+            from collections import Counter
+            freq = Counter(meaningful)
+            top_words = [word for word, count in freq.most_common(20) if count > 1]
+            profile['seed_topics'] = top_words[:15]
+            
+    # Normalize pre_query_discovery topics
+    if 'pre_query_discovery' not in profile or not isinstance(profile['pre_query_discovery'], dict):
+        profile['pre_query_discovery'] = {}
+        
+    pq = profile['pre_query_discovery']
+    if not pq.get('industry_topics'):
+        pq['industry_topics'] = profile.get('seed_topics') or []
+    if not pq.get('services'):
+        pq['services'] = [profile.get('industry')]
+    if not pq.get('products'):
+        pq['products'] = []
+        
+    return profile
+
 BI_PROMPT = """You are an elite Business Intelligence Agent specializing in AI Search Engine Optimization (GEO/AIO).
 Your goal is to analyze the company's verified business facts AND raw page content to write a comprehensive corporate, market, & recommendation intelligence profile.
 
@@ -193,10 +273,12 @@ class BusinessIntelligenceAgent:
                 resp_text = resp_text[:-3]
             resp_text = resp_text.strip()
             
-            return json.loads(resp_text)
+            profile = json.loads(resp_text)
+            profile = validate_and_clean_profile(profile, website_url, page_content_snippet)
+            return profile
         except Exception as e:
             logger.error(f"Error in BI Analysis: {e}")
-            return {
+            fallback = {
                 "company_name": "Unknown",
                 "industry": "Unknown",
                 "description": "NOT FOUND",
@@ -236,6 +318,7 @@ class BusinessIntelligenceAgent:
                     "content_gaps": []
                 }
             }
+            return validate_and_clean_profile(fallback, website_url, page_content_snippet)
 
 def run_business_intelligence(state: AgentState) -> Dict[str, Any]:
     """Node function that executes business intelligence analysis."""

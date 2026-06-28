@@ -336,10 +336,10 @@ def expand_questions_naturally(seeds: List[Dict[str, Any]], bi: Dict[str, Any], 
         
     styles = [
         lambda q: q,
-        lambda q: f"who recommends {q}",
-        lambda q: f"how to find {q}",
-        lambda q: f"best {q}" if not q.startswith("best") else q,
-        lambda q: f"recommend a {q}",
+        lambda q: f"who recommends {q}" if "recommend" not in q.lower() else q,
+        lambda q: f"how to find {q}" if "how to find" not in q.lower() else q,
+        lambda q: f"best {q}" if not q.lower().startswith("best") and "best" not in q.lower() else q,
+        lambda q: f"recommend a {q}" if "recommend" not in q.lower() else q,
         lambda q: f"hey siri {q}",
         lambda q: f"alexa where can i find {q}"
     ]
@@ -385,8 +385,32 @@ def expand_questions_naturally(seeds: List[Dict[str, Any]], bi: Dict[str, Any], 
 
 def run_question_discovery(state: AgentState) -> Dict[str, Any]:
     logger.info("Running V3 Question Discovery Node (Complete Refactor)...")
-    agent = QuestionDiscoveryAgent()
+    
     bi = state.get("business_intelligence", {})
+    
+    # GUARD: Never run with unknown/empty profile
+    business_name = bi.get('company_name') or bi.get('business_name', '')
+    business_type = bi.get('industry') or bi.get('business_type', '')
+    seed_topics = bi.get('seed_topics', [])
+    
+    INVALID = ['unknown', 'Unknown', 'UNKNOWN', '', 'None', 'Acme Corp']
+    
+    if not business_name or business_name in INVALID or not business_type or business_type in INVALID:
+        raise ValueError(
+            f"Profile not properly extracted. "
+            f"business_name='{business_name}', "
+            f"business_type='{business_type}'. "
+            f"Fix crawler first."
+        )
+    
+    if not seed_topics or len(seed_topics) == 0:
+        raise ValueError(
+            "No seed topics extracted. "
+            "Profiler must successfully extract topics "
+            "before question discovery can run."
+        )
+        
+    agent = QuestionDiscoveryAgent()
     verified_facts = state.get("verified_facts", [])
     
     seeds = agent.discover_questions(

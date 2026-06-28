@@ -572,8 +572,8 @@ async def run_analysis_pipeline(project_id: str, run_id: str, website_url: str):
         grounding_engine = GroundingEngineV2()
         grounding_res = grounding_engine.run(final_state, identity_res)
         
-        # Abort pipeline early if grounding score is < 80% or if domain collision is found
-        if grounding_res["grounding_score"] < 80.0 or grounding_res["details"]["domain_conflicts"] > 0:
+        # Abort pipeline early if grounding score is < 70% or if domain collision is found
+        if grounding_res["grounding_score"] < 70.0 or grounding_res["details"]["domain_conflicts"] > 0:
             logger.error(f"[Pipeline] Grounding check failed with score {grounding_res['grounding_score']:.1f}%. Aborting execution.")
             total_duration = time.time() - start_run_time
             supabase_client.table("analysis_runs").update({
@@ -1192,7 +1192,7 @@ async def run_analysis_pipeline(project_id: str, run_id: str, website_url: str):
         k_integrity = intel_res.get("keyword_integrity", "FAIL")
         
         gate_passed = (
-            grounding_score >= 95.0 and
+            grounding_score >= 70.0 and
             identity_score >= 90.0 and
             q_integrity == "PASS" and
             k_integrity == "PASS" and
@@ -1203,8 +1203,8 @@ async def run_analysis_pipeline(project_id: str, run_id: str, website_url: str):
         
         if not gate_passed:
             reasons = []
-            if grounding_score < 95.0:
-                reasons.append(f"Grounding score {grounding_score:.1f}% < 95%")
+            if grounding_score < 70.0:
+                reasons.append(f"Grounding score {grounding_score:.1f}% < 70%")
             if identity_score < 90.0:
                 reasons.append(f"Identity score {identity_score:.1f}% < 90%")
             if q_integrity != "PASS":

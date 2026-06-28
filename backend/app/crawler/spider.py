@@ -150,18 +150,30 @@ class WebsiteSpider:
         try:
             page = await context.new_page()
             try:
-                # First try networkidle — waits for JS framework to fully hydrate
-                await page.goto(url, wait_until="networkidle", timeout=30000)
-            except Exception:
-                # Fallback: domcontentloaded is faster but misses SPA content
+                # Navigate to URL with a generous timeout and try networkidle
+                await page.goto(url, wait_until="networkidle", timeout=45000)
+            except Exception as e:
+                logger.warning(f"Playwright goto networkidle timeout/failed for {url}: {e}, attempting domcontentloaded fallback...")
                 try:
-                    await page.goto(url, wait_until="domcontentloaded", timeout=20000)
-                except Exception as e:
-                    logger.error(f"Playwright goto failed for {url}: {e}")
-                    return ""
+                    await page.goto(url, wait_until="domcontentloaded", timeout=25000)
+                except Exception as e2:
+                    logger.error(f"Playwright fallback goto failed for {url}: {e2}")
+                    # Continue anyway to capture whatever content has loaded
 
-            # Wait for JS framework hydration (React/Next.js/Vue)
-            await page.wait_for_timeout(JS_WAIT_MS)
+            # Wait for React to render - CRITICAL for SPAs
+            await page.wait_for_timeout(3000)
+
+            # Try to wait for actual content to appear
+            try:
+                await page.wait_for_selector(
+                    'main, #root > div > div, .content, article, section',
+                    timeout=8000
+                )
+            except Exception:
+                pass  # Continue even if selector not found
+
+            # Wait a bit more for lazy loading
+            await page.wait_for_timeout(2000)
 
             # Scroll to bottom to trigger lazy-loaded content
             try:
@@ -170,6 +182,19 @@ class WebsiteSpider:
                 await page.evaluate("window.scrollTo(0, 0)")
             except Exception:
                 pass
+
+            # Remove junk elements from DOM before extracting content,
+            # but keep application/ld+json script tags for structured data
+            try:
+                await page.evaluate('''() => {
+                    const junk = document.querySelectorAll(
+                        'nav, footer, script:not([type="application/ld+json"]), style, noscript, header, ' +
+                        '[class*="cookie"], [class*="popup"], [class*="modal"]'
+                    );
+                    junk.forEach(el => el.remove());
+                }''')
+            except Exception as eval_err:
+                logger.warning(f"Error removing junk elements in Playwright: {eval_err}")
 
             html = await page.content()
             return html

@@ -195,10 +195,10 @@ class FallbackEngine:
             final_expanded = []
             styles = [
                 lambda q: q,
-                lambda q: f"who recommends {q}",
-                lambda q: f"how to find {q}",
-                lambda q: f"best {q}" if not q.startswith("best") else q,
-                lambda q: f"recommend a {q}",
+                lambda q: f"who recommends {q}" if "recommend" not in q.lower() else q,
+                lambda q: f"how to find {q}" if "how to find" not in q.lower() else q,
+                lambda q: f"best {q}" if not q.lower().startswith("best") and "best" not in q.lower() else q,
+                lambda q: f"recommend a {q}" if "recommend" not in q.lower() else q,
                 lambda q: f"hey siri {q}",
                 lambda q: f"alexa where can i find {q}"
             ]
