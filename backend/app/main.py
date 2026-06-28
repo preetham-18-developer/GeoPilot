@@ -1,7 +1,19 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
-from app.routers import projects, analysis, reports, blogs
+from app.routers import (
+    projects,
+    analysis_results,
+    analysis_questions,
+    analysis_keywords,
+    analysis_geo,
+    analysis_analytics,
+    analysis_reliability,
+    analysis_execution,
+    analysis_optimization,
+    reports,
+    blogs
+)
 from supabase import create_client, ClientOptions
 from app.core.supabase import _client_ctx, _global_client
 
@@ -61,7 +73,14 @@ app.add_middleware(
 
 # Include routers
 app.include_router(projects.router, prefix=settings.API_V1_STR)
-app.include_router(analysis.router, prefix=settings.API_V1_STR)
+app.include_router(analysis_results.router, prefix=settings.API_V1_STR)
+app.include_router(analysis_questions.router, prefix=settings.API_V1_STR)
+app.include_router(analysis_keywords.router, prefix=settings.API_V1_STR)
+app.include_router(analysis_geo.router, prefix=settings.API_V1_STR)
+app.include_router(analysis_analytics.router, prefix=settings.API_V1_STR)
+app.include_router(analysis_reliability.router, prefix=settings.API_V1_STR)
+app.include_router(analysis_execution.router, prefix=settings.API_V1_STR)
+app.include_router(analysis_optimization.router, prefix=settings.API_V1_STR)
 app.include_router(reports.router, prefix=settings.API_V1_STR)
 app.include_router(blogs.router, prefix=settings.API_V1_STR)
 

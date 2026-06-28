@@ -10,8 +10,9 @@ async def test_playwright():
                 viewport={"width": 1280, "height": 900}
             )
             page = await context.new_page()
-            print("Navigating to thelibrarycompany.com...")
-            await page.goto("https://thelibrarycompany.com", wait_until="networkidle", timeout=30000)
+            print("Navigating to thelibrarycompany.com/about...")
+            await page.goto("https://thelibrarycompany.com/about", wait_until="networkidle", timeout=30000)
+
             await page.wait_for_timeout(3000)
             
             # Get rendered content

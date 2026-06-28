@@ -47,23 +47,12 @@ def get_active_queue_size() -> int:
         return 0
 
 
-def _save_metrics_async(request_time: float, hits: int, misses: int, queue_size: int, memory_usage: float):
-    """Inserts metrics in a background thread to prevent blocking request resolution."""
-    def run_insert():
-        try:
-            from app.core.supabase import supabase_client
-            supabase_client.table("system_metrics").insert({
-                "request_time": round(request_time, 4),
-                "cache_hits": hits,
-                "cache_misses": misses,
-                "queue_size": queue_size,
-                "task_execution_time": 0.0,
-                "memory_usage": round(memory_usage, 2)
-            }).execute()
-        except Exception as e:
-            logger.warning(f"Error saving request performance metrics: {e}")
-
-    threading.Thread(target=run_insert, daemon=True).start()
+def _save_metrics_async(request_time: float, hits: int, misses: int, memory_usage: float):
+    """Logs performance metrics locally to avoid concurrent connection pool corruption."""
+    logger.info(
+        f"[METRICS] Request Time: {request_time:.4f}s | Cache Hits: {hits} | "
+        f"Cache Misses: {misses} | Memory Usage: {memory_usage:.2f}MB"
+    )
 
 
 class PerformanceMetricsMiddleware(BaseHTTPMiddleware):
@@ -85,16 +74,15 @@ class PerformanceMetricsMiddleware(BaseHTTPMiddleware):
             duration = time.time() - start_time
             hits, misses = cache_metrics.get_and_reset()
             mem_mb = get_memory_usage_mb()
-            q_size = get_active_queue_size()
-            _save_metrics_async(duration, hits, misses, q_size, mem_mb)
+            _save_metrics_async(duration, hits, misses, mem_mb)
             raise e
 
         duration = time.time() - start_time
         hits, misses = cache_metrics.get_and_reset()
         mem_mb = get_memory_usage_mb()
-        q_size = get_active_queue_size()
         
         # Save metrics asynchronously
-        _save_metrics_async(duration, hits, misses, q_size, mem_mb)
+        _save_metrics_async(duration, hits, misses, mem_mb)
         
         return response
+

@@ -1,6 +1,9 @@
 "use client";
 
+import { useState } from "react";
 import PaginationControls from "./PaginationControls";
+import { SkeletonCardGrid, NoDataState } from "./ui/SkeletonLoader";
+import { ProgressBar, getScoreColor } from "./ui/RadialGauge";
 
 interface QuestionDiscoveryTabProps {
   questionsData: any[];
@@ -17,6 +20,117 @@ interface QuestionDiscoveryTabProps {
   onSortChange: (sortBy: string, sortOrder: string) => void;
   onPrevPage: () => void;
   onNextPage: () => void;
+}
+
+function highlight(text: string, query: string) {
+  if (!query.trim() || !text) return <>{text}</>;
+  const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const parts = text.split(new RegExp(`(${escaped})`, "gi"));
+  return (
+    <>
+      {parts.map((p, i) =>
+        p.toLowerCase() === query.toLowerCase() ? (
+          <mark key={i} style={{ background: "rgba(139,92,246,0.35)", color: "inherit", borderRadius: "2px", padding: "0 2px" }}>
+            {p}
+          </mark>
+        ) : (
+          <span key={i}>{p}</span>
+        )
+      )}
+    </>
+  );
+}
+
+function QuestionCard({ q, search }: { q: any; search: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const priority_score = q.priority_score ?? 0;
+  const rec_score = q.recommendation_score ?? 0;
+  const confidence = Math.round((q.confidence_score ?? 0) * 100);
+
+  return (
+    <div className="card" style={{ display: "flex", flexDirection: "column", gap: "0.875rem" }}>
+      {/* Header: category + priority */}
+      <div className="flex items-center justify-between gap-2">
+        <span className="badge badge-info" style={{ fontSize: "0.7rem" }}>{q.category ?? "General"}</span>
+        <div className="flex gap-2">
+          <span className={`badge ${q.priority === "High" ? "badge-danger" : q.priority === "Medium" ? "badge-warning" : "badge-muted"}`} style={{ fontSize: "0.7rem" }}>
+            {q.priority ?? "Low"} Priority
+          </span>
+          <span className="badge badge-muted" style={{ fontSize: "0.7rem", textTransform: "capitalize" }}>
+            {q.intent ?? "informational"}
+          </span>
+        </div>
+      </div>
+
+      {/* Question text */}
+      <h3
+        style={{ fontSize: "0.9375rem", fontWeight: 600, lineHeight: 1.5, color: "var(--text-main)", margin: 0, cursor: "pointer" }}
+        onClick={() => setExpanded((v) => !v)}
+      >
+        {highlight(q.question_text, search)}
+      </h3>
+
+      {/* Score bars */}
+      <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+        <ProgressBar value={rec_score} label="Recommendation" showLabel color={getScoreColor(rec_score)} height={4} />
+        <ProgressBar value={priority_score} label="Priority" showLabel color="var(--accent-amber)" height={4} />
+        <ProgressBar value={confidence} label="Confidence" showLabel color="var(--secondary)" height={4} />
+      </div>
+
+      {/* Metadata chips */}
+      <div className="flex gap-2 flex-wrap" style={{ fontSize: "0.75rem" }}>
+        <span style={{ color: "var(--text-dark)" }}>
+          Difficulty:{" "}
+          <span style={{
+            fontWeight: 600,
+            color: q.difficulty_estimate === "Hard" ? "var(--accent-red)" : q.difficulty_estimate === "Medium" ? "var(--accent-amber)" : "var(--accent-green)"
+          }}>
+            {q.difficulty_estimate ?? "Medium"}
+          </span>
+        </span>
+        <span style={{ color: "var(--border-strong)" }}>·</span>
+        <span style={{ color: "var(--text-dark)" }}>
+          Opportunity:{" "}
+          <span style={{ fontWeight: 600, color: q.opportunity_estimate === "High" ? "var(--accent-green)" : "var(--text-muted)" }}>
+            {q.opportunity_estimate ?? "Medium"}
+          </span>
+        </span>
+        <span style={{ color: "var(--border-strong)" }}>·</span>
+        <span style={{ color: "var(--text-dark)" }}>
+          Commercial: <span style={{ fontWeight: 600, color: "var(--primary)" }}>{q.commercial_score ?? 0}/100</span>
+        </span>
+      </div>
+
+      {/* Expandable answer */}
+      <button
+        onClick={() => setExpanded((v) => !v)}
+        className="btn btn-ghost btn-sm"
+        style={{ justifyContent: "flex-start", gap: "0.5rem", paddingLeft: 0 }}
+        aria-expanded={expanded}
+      >
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+          style={{ transition: "transform 0.2s", transform: expanded ? "rotate(90deg)" : "rotate(0deg)" }}>
+          <path d="m9 18 6-6-6-6" />
+        </svg>
+        {expanded ? "Hide" : "Show"} recommended answer
+      </button>
+
+      {expanded && q.recommended_answer && (
+        <div
+          className="animate-fade-in"
+          style={{
+            borderLeft: "2px solid var(--secondary)",
+            paddingLeft: "1rem",
+            fontSize: "0.8375rem",
+            color: "var(--text-muted)",
+            lineHeight: 1.65,
+          }}
+        >
+          {q.recommended_answer}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function QuestionDiscoveryTab({
@@ -36,226 +150,83 @@ export default function QuestionDiscoveryTab({
   onNextPage,
 }: QuestionDiscoveryTabProps) {
   return (
-    <div>
-      {/* Filters */}
-      <div
-        className="card"
-        style={{
-          padding: "1rem",
-          marginBottom: "1.5rem",
-          display: "flex",
-          gap: "1rem",
-          flexWrap: "wrap",
-          alignItems: "center",
-        }}
-      >
-        <div style={{ flex: 1, minWidth: "200px" }}>
+    <div className="animate-fade-in">
+      {/* Toolbar */}
+      <div className="card" style={{ padding: "0.875rem 1rem", marginBottom: "1.25rem", display: "flex", gap: "0.875rem", flexWrap: "wrap", alignItems: "center" }}>
+        <div style={{ flex: 1, minWidth: "200px", position: "relative" }}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--text-dark)" strokeWidth="2"
+            style={{ position: "absolute", left: "0.75rem", top: "50%", transform: "translateY(-50%)" }}>
+            <circle cx="11" cy="11" r="8" /><path d="m21 21-4.35-4.35" />
+          </svg>
           <input
             type="text"
-            placeholder="Search questions by text..."
+            placeholder="Search questions..."
             value={questionSearch}
             onChange={(e) => onSearchChange(e.target.value)}
             className="form-input"
-            style={{ padding: "0.4rem 0.8rem", borderRadius: "6px" }}
+            style={{ paddingLeft: "2.25rem" }}
+            aria-label="Search questions"
           />
         </div>
-        <div>
-          <select
-            value={questionTypeFilter}
-            onChange={(e) => onTypeFilterChange(e.target.value)}
-            className="form-input"
-            style={{ padding: "0.4rem 0.8rem", borderRadius: "6px" }}
-          >
-            <option value="All">All Categories</option>
-            {questionsCategories?.map((cat: string) => (
-              <option key={cat} value={cat}>
-                {cat}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div>
-          <select
-            value={`${questionsSortBy}-${questionsSortOrder}`}
-            onChange={(e) => {
-              const [by, order] = e.target.value.split("-");
-              onSortChange(by, order);
-            }}
-            className="form-input"
-            style={{ padding: "0.4rem 0.8rem", borderRadius: "6px" }}
-          >
-            <option value="priority_score-desc">Priority Score (Highest first)</option>
-            <option value="recommendation_score-desc">Recommendation Score (Highest first)</option>
-            <option value="commercial_score-desc">Commercial Score (Highest first)</option>
-            <option value="question-asc">Question Text (A-Z)</option>
-            <option value="confidence_score-desc">Confidence Score (Highest first)</option>
-          </select>
+
+        <select
+          value={questionTypeFilter}
+          onChange={(e) => onTypeFilterChange(e.target.value)}
+          className="form-input"
+          style={{ minWidth: "160px" }}
+          aria-label="Filter by category"
+        >
+          <option value="All">All Categories</option>
+          {questionsCategories?.map((cat) => <option key={cat} value={cat}>{cat}</option>)}
+        </select>
+
+        <select
+          value={`${questionsSortBy}-${questionsSortOrder}`}
+          onChange={(e) => {
+            const [by, order] = e.target.value.split("-");
+            onSortChange(by, order);
+          }}
+          className="form-input"
+          style={{ minWidth: "220px" }}
+          aria-label="Sort questions"
+        >
+          <option value="priority_score-desc">Priority Score (High → Low)</option>
+          <option value="recommendation_score-desc">Recommendation Score (High → Low)</option>
+          <option value="commercial_score-desc">Commercial Score (High → Low)</option>
+          <option value="question-asc">Question Text (A → Z)</option>
+          <option value="confidence_score-desc">Confidence Score (High → Low)</option>
+        </select>
+
+        <div style={{ color: "var(--text-dark)", fontSize: "0.8125rem", whiteSpace: "nowrap" }}>
+          <strong style={{ color: "var(--text-muted)" }}>{questionsTotalCount}</strong> queries
         </div>
       </div>
 
       {/* Content */}
       {questionsLoading ? (
-        <div className="card flex-center" style={{ padding: "4rem" }}>
-          <div className="spinner"></div>
-          <p style={{ color: "var(--text-muted)", marginTop: "1rem" }}>
-            Loading discovered questions...
-          </p>
-        </div>
+        <SkeletonCardGrid count={6} />
+      ) : questionsData.length === 0 ? (
+        <NoDataState
+          title="No questions found"
+          description="Try adjusting your search or filters. Run an analysis to discover LLM queries."
+        />
       ) : (
         <>
-          <div className="grid-2">
-            {questionsData.length > 0 ? (
-              questionsData.map((q: any, i: number) => (
-                <div
-                  key={i}
-                  className="card glow-border"
-                  style={{ padding: "1.5rem" }}
-                >
-                  <div
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                      marginBottom: "0.75rem",
-                    }}
-                  >
-                    <span
-                      className="badge badge-success"
-                      style={{ fontSize: "0.75rem" }}
-                    >
-                      {q.category}
-                    </span>
-                    <span
-                      className={`badge ${
-                        q.priority === "High"
-                          ? "badge-danger"
-                          : q.priority === "Medium"
-                          ? "badge-warning"
-                          : "badge-info"
-                      }`}
-                      style={{ fontSize: "0.75rem" }}
-                    >
-                      {q.priority} Priority
-                    </span>
-                  </div>
-                  <h3 style={{ marginBottom: "0.75rem", fontSize: "1.1rem" }}>
-                    {q.question_text}
-                  </h3>
-
-                  {/* Multi-factor Score Grid */}
-                  <div
-                    style={{
-                      display: "grid",
-                      gridTemplateColumns: "repeat(2, 1fr)",
-                      gap: "0.5rem",
-                      fontSize: "0.8rem",
-                      color: "var(--text-muted)",
-                      marginBottom: "1rem",
-                      background: "rgba(255,255,255,0.02)",
-                      padding: "0.75rem",
-                      borderRadius: "8px",
-                      border: "1px solid rgba(255,255,255,0.05)",
-                    }}
-                  >
-                    <div>
-                      Recommendation:{" "}
-                      <strong style={{ color: "var(--accent-green)" }}>
-                        {q.recommendation_score ?? 0}/100
-                      </strong>
-                    </div>
-                    <div>
-                      Commercial Score:{" "}
-                      <strong style={{ color: "var(--secondary)" }}>
-                        {q.commercial_score ?? 0}/100
-                      </strong>
-                    </div>
-                    <div>
-                      Intent Score: <strong>{q.intent_score ?? 0}/100</strong>
-                    </div>
-                    <div>
-                      Priority Score:{" "}
-                      <strong style={{ color: "var(--accent-amber)" }}>
-                        {q.priority_score ?? 0}/100
-                      </strong>
-                    </div>
-                    <div>
-                      Difficulty:{" "}
-                      <span
-                        style={{
-                          color:
-                            q.difficulty_estimate === "Hard"
-                              ? "var(--accent-red)"
-                              : q.difficulty_estimate === "Medium"
-                              ? "var(--accent-amber)"
-                              : "var(--accent-green)",
-                          fontWeight: 600,
-                        }}
-                      >
-                        {q.difficulty_estimate || "Medium"}
-                      </span>
-                    </div>
-                    <div>
-                      Opportunity:{" "}
-                      <span
-                        style={{
-                          color:
-                            q.opportunity_estimate === "High"
-                              ? "var(--accent-green)"
-                              : "var(--text-muted)",
-                        }}
-                      >
-                        {q.opportunity_estimate || "Medium"}
-                      </span>
-                    </div>
-                    <div>
-                      Search Intent:{" "}
-                      <strong style={{ textTransform: "capitalize" }}>
-                        {q.intent || "informational"}
-                      </strong>
-                    </div>
-                    <div>
-                      Confidence:{" "}
-                      <strong>
-                        {(q.confidence_score * 100).toFixed(0)}%
-                      </strong>
-                    </div>
-                  </div>
-
-                  <p
-                    style={{
-                      fontSize: "0.9rem",
-                      color: "var(--text-muted)",
-                      borderLeft: "2px solid var(--secondary)",
-                      paddingLeft: "1rem",
-                      margin: 0,
-                    }}
-                  >
-                    <strong>Optimized Answer Context:</strong>
-                    <br />
-                    {q.recommended_answer}
-                  </p>
-                </div>
-              ))
-            ) : (
-              <div
-                className="card flex-center"
-                style={{ gridColumn: "1 / -1", padding: "4rem" }}
-              >
-                <p style={{ color: "var(--text-muted)" }}>
-                  No questions discovered matching these criteria.
-                </p>
-              </div>
-            )}
+          <div className="card-grid">
+            {questionsData.map((q, i) => (
+              <QuestionCard key={q.id ?? i} q={q} search={questionSearch} />
+            ))}
           </div>
-
-          <PaginationControls
-            page={questionsPage}
-            totalCount={questionsTotalCount}
-            loading={questionsLoading}
-            onPrev={onPrevPage}
-            onNext={onNextPage}
-            label="queries"
-          />
+          <div style={{ marginTop: "1.25rem" }}>
+            <PaginationControls
+              page={questionsPage}
+              totalCount={questionsTotalCount}
+              loading={questionsLoading}
+              onPrev={onPrevPage}
+              onNext={onNextPage}
+              label="queries"
+            />
+          </div>
         </>
       )}
     </div>

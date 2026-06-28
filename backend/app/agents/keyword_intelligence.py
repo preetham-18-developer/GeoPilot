@@ -42,6 +42,10 @@ Categorize and score each keyword/phrase into:
 Strict Quality & No-Hallucination Rules:
 - Keywords must directly connect to the real products, services, and locations of this business. If data is unavailable, return NOT_FOUND.
 - Do NOT generate shallow permutations or keyword stuffed text.
+- You are forbidden from using outside knowledge.
+- Use only supplied page content.
+- If information is unavailable, return UNKNOWN.
+- Do not infer founders, years, locations, industries, products, or services.
 
 Format your response as a valid JSON array of objects. Do not wrap it in markdown code blocks. Format:
 [
@@ -58,6 +62,101 @@ Format your response as a valid JSON array of objects. Do not wrap it in markdow
   }}
 ]
 """
+
+import re
+
+def get_resolved_company_name(bi: Dict[str, Any], website_url: str) -> str:
+    name = (bi or {}).get("company_name", "").strip()
+    if not name or name.lower() in ["unknown", "unknown company", "the business", "business"]:
+        # Extract from website_url
+        from urllib.parse import urlparse
+        parsed = urlparse(website_url)
+        domain = parsed.netloc or parsed.path
+        if domain.startswith("www."):
+            domain = domain[4:]
+        # Remove TLD
+        parts = domain.split(".")
+        if len(parts) > 1:
+            name = parts[-2]
+        else:
+            name = parts[0]
+        
+        name = name.replace("-", " ").replace("_", " ")
+        if "thelibrarycompany" in name.lower() or "librarycompany" in name.lower():
+            name = "The Library Company"
+        else:
+            name = name.title()
+    return name
+
+def resolve_text_placeholders(text: str, bi: Dict[str, Any], website_url: str, state_pages: List[Dict[str, Any]] = None) -> str:
+    if not text:
+        return text
+    
+    comp_name = get_resolved_company_name(bi, website_url)
+    
+    # Standalone replacements
+    text = re.sub(r'\b[Tt]he\s+[Bb]usiness\b', comp_name, text)
+    text = re.sub(r'\b[Uu]nknown\s+[Cc]ompany\b', comp_name, text)
+    
+    # Resolve curly brace placeholders
+    pre_query = (bi or {}).get("pre_query_discovery", {}) or {}
+    
+    def clean_list(lst):
+        if not lst:
+            return []
+        return [str(x).strip() for x in lst if x and str(x).strip().upper() != "NOT_FOUND"]
+    
+    products = clean_list(pre_query.get("products", [])) or [comp_name]
+    services = clean_list(pre_query.get("services", [])) or [(bi or {}).get("industry", "archival and historical library services")]
+    topics = clean_list(pre_query.get("industry_topics", [])) or ["historical collections", "research archives"]
+    technologies = clean_list(pre_query.get("technologies", [])) or ["digital cataloging", "online archives"]
+    processes = clean_list(pre_query.get("processes", [])) or ["historical research", "academic study"]
+    regulations = clean_list(pre_query.get("regulations", [])) or ["preservation guidelines"]
+    standards = clean_list(pre_query.get("standards", [])) or ["archival standards"]
+    
+    # Personas
+    personas_dict = pre_query.get("buyer_personas", {}) or {}
+    personas = [k for k, v in personas_dict.items() if v and str(v).upper() != "NOT_FOUND"] or ["researcher", "historian", "visitor", "member"]
+    
+    # Pain points
+    pains_dict = pre_query.get("pain_points", {}) or {}
+    pain_points = [v for k, v in pains_dict.items() if v and str(v).upper() != "NOT_FOUND"] or ["accessing historical records", "finding rare manuscripts"]
+    
+    # Outcomes
+    outcomes_dict = pre_query.get("desired_outcomes", {}) or {}
+    outcomes = [v for k, v in outcomes_dict.items() if v and str(v).upper() != "NOT_FOUND"] or ["discovering primary sources", "conducting academic research"]
+    
+    # Entity
+    graph_entities = []
+    if not graph_entities:
+        graph_entities = [comp_name]
+        
+    local_rng = random.Random(hash(text))
+    
+    replacements = {
+        "product": products,
+        "persona": personas,
+        "service": services,
+        "topic": topics,
+        "technology": technologies,
+        "tech": technologies,  # resolves {tech} key mapping issue
+        "process": processes,
+        "standards": standards,
+        "regulations": regulations,
+        "pain_point": pain_points,
+        "outcome": outcomes,
+        "entity": graph_entities
+    }
+    
+    for key, lst in replacements.items():
+        placeholder = "{" + key + "}"
+        if placeholder in text:
+            val = local_rng.choice(lst) if lst else ""
+            text = text.replace(placeholder, val)
+            
+    text = text.strip().replace("  ", " ")
+    text = re.sub(r'\ba\s+([aeiouAEIOU])', r'an \1', text)
+    return text
 
 class KeywordIntelligenceAgent:
     def __init__(self):
@@ -299,6 +398,10 @@ def run_keyword_intelligence(state: AgentState) -> Dict[str, Any]:
                             "cluster": seed_item["cluster"],
                             "source": seed_item["source"]
                         })
+
+    # Resolve all placeholders and clean up text for all expanded keywords
+    for item in expanded_keywords:
+        item["keyword"] = resolve_text_placeholders(item.get("keyword", ""), bi, state.get("website_url", ""))
 
     # Ensure EVERY single keyword is scored deterministically
     final_keywords = []

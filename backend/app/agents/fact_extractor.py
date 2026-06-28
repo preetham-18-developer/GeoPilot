@@ -28,6 +28,10 @@ Strict No-Hallucination Policy:
 - ONLY extract facts that are explicitly stated in the text.
 - Do NOT make up products, pricing, reviews, or links.
 - If no facts are found on this page, return an empty list.
+- You are forbidden from using outside knowledge.
+- Use only supplied page content.
+- If information is unavailable, return UNKNOWN.
+- Do not infer founders, years, locations, industries, products, or services.
 
 Your response must be a valid JSON array of objects. Do not wrap it in markdown code blocks or add text. Format:
 [

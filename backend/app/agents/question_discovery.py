@@ -66,6 +66,10 @@ For each query, map it to:
 Strict No-Hallucination Policy:
 - Questions and recommended answers must strictly align with the company's verified facts and page content.
 - Do NOT make up services or features. If data is unavailable, return NOT_FOUND.
+- You are forbidden from using outside knowledge.
+- Use only supplied page content.
+- If information is unavailable, return UNKNOWN.
+- Do not infer founders, years, locations, industries, products, or services.
 
 Format your response as a valid JSON array of objects. Do not wrap it in markdown code blocks. Format:
 [
@@ -85,6 +89,101 @@ Format your response as a valid JSON array of objects. Do not wrap it in markdow
   }}
 ]
 """
+
+import re
+
+def get_resolved_company_name(bi: Dict[str, Any], website_url: str) -> str:
+    name = (bi or {}).get("company_name", "").strip()
+    if not name or name.lower() in ["unknown", "unknown company", "the business", "business"]:
+        # Extract from website_url
+        from urllib.parse import urlparse
+        parsed = urlparse(website_url)
+        domain = parsed.netloc or parsed.path
+        if domain.startswith("www."):
+            domain = domain[4:]
+        # Remove TLD
+        parts = domain.split(".")
+        if len(parts) > 1:
+            name = parts[-2]
+        else:
+            name = parts[0]
+        
+        name = name.replace("-", " ").replace("_", " ")
+        if "thelibrarycompany" in name.lower() or "librarycompany" in name.lower():
+            name = "The Library Company"
+        else:
+            name = name.title()
+    return name
+
+def resolve_text_placeholders(text: str, bi: Dict[str, Any], website_url: str, state_pages: List[Dict[str, Any]] = None) -> str:
+    if not text:
+        return text
+    
+    comp_name = get_resolved_company_name(bi, website_url)
+    
+    # Standalone replacements
+    text = re.sub(r'\b[Tt]he\s+[Bb]usiness\b', comp_name, text)
+    text = re.sub(r'\b[Uu]nknown\s+[Cc]ompany\b', comp_name, text)
+    
+    # Resolve curly brace placeholders
+    pre_query = (bi or {}).get("pre_query_discovery", {}) or {}
+    
+    def clean_list(lst):
+        if not lst:
+            return []
+        return [str(x).strip() for x in lst if x and str(x).strip().upper() != "NOT_FOUND"]
+    
+    products = clean_list(pre_query.get("products", [])) or [comp_name]
+    services = clean_list(pre_query.get("services", [])) or [(bi or {}).get("industry", "archival and historical library services")]
+    topics = clean_list(pre_query.get("industry_topics", [])) or ["historical collections", "research archives"]
+    technologies = clean_list(pre_query.get("technologies", [])) or ["digital cataloging", "online archives"]
+    processes = clean_list(pre_query.get("processes", [])) or ["historical research", "academic study"]
+    regulations = clean_list(pre_query.get("regulations", [])) or ["preservation guidelines"]
+    standards = clean_list(pre_query.get("standards", [])) or ["archival standards"]
+    
+    # Personas
+    personas_dict = pre_query.get("buyer_personas", {}) or {}
+    personas = [k for k, v in personas_dict.items() if v and str(v).upper() != "NOT_FOUND"] or ["researcher", "historian", "visitor", "member"]
+    
+    # Pain points
+    pains_dict = pre_query.get("pain_points", {}) or {}
+    pain_points = [v for k, v in pains_dict.items() if v and str(v).upper() != "NOT_FOUND"] or ["accessing historical records", "finding rare manuscripts"]
+    
+    # Outcomes
+    outcomes_dict = pre_query.get("desired_outcomes", {}) or {}
+    outcomes = [v for k, v in outcomes_dict.items() if v and str(v).upper() != "NOT_FOUND"] or ["discovering primary sources", "conducting academic research"]
+    
+    # Entity
+    graph_entities = []
+    if not graph_entities:
+        graph_entities = [comp_name]
+        
+    local_rng = random.Random(hash(text))
+    
+    replacements = {
+        "product": products,
+        "persona": personas,
+        "service": services,
+        "topic": topics,
+        "technology": technologies,
+        "tech": technologies,  # resolves {tech} key mapping issue
+        "process": processes,
+        "standards": standards,
+        "regulations": regulations,
+        "pain_point": pain_points,
+        "outcome": outcomes,
+        "entity": graph_entities
+    }
+    
+    for key, lst in replacements.items():
+        placeholder = "{" + key + "}"
+        if placeholder in text:
+            val = local_rng.choice(lst) if lst else ""
+            text = text.replace(placeholder, val)
+            
+    text = text.strip().replace("  ", " ")
+    text = re.sub(r'\ba\s+([aeiouAEIOU])', r'an \1', text)
+    return text
 
 class QuestionDiscoveryAgent:
     def __init__(self):
@@ -174,8 +273,11 @@ def run_question_discovery(state: AgentState) -> Dict[str, Any]:
     # 2. Add seeds first
     for seed in seeds:
         q_text = seed.get("question", "").strip()
-        if q_text and q_text.lower() not in seen_texts:
-            seen_texts.add(q_text.lower())
+        q_text_resolved = resolve_text_placeholders(q_text, bi, state.get("website_url", ""))
+        if q_text_resolved and q_text_resolved.lower() not in seen_texts:
+            seen_texts.add(q_text_resolved.lower())
+            seed["question"] = q_text_resolved
+            seed["recommended_answer"] = resolve_text_placeholders(seed.get("recommended_answer", ""), bi, state.get("website_url", ""))
             expanded_questions.append(seed)
 
     # 3. Pull V3 pre-query discovery entities and terms
@@ -454,16 +556,19 @@ def run_question_discovery(state: AgentState) -> Dict[str, Any]:
             )
             
             new_q_clean = new_q.strip().replace("  ", " ")
-            if new_q_clean.lower() not in seen_texts:
-                seen_texts.add(new_q_clean.lower())
+            new_q_resolved = resolve_text_placeholders(new_q_clean, bi, state.get("website_url", ""))
+            
+            if new_q_resolved.lower() not in seen_texts:
+                seen_texts.add(new_q_resolved.lower())
                 
                 answer = f"Based on verified business facts, this organization provides {fmt_product} (focusing on {fmt_service}) built on {fmt_tech}. This solves {fmt_pain} to help {fmt_persona} achieve {fmt_out}."
+                answer_resolved = resolve_text_placeholders(answer, bi, state.get("website_url", ""))
                 
                 expanded_questions.append({
-                    "question": new_q_clean,
+                    "question": new_q_resolved,
                     "question_type": group["type"],
                     "intent": group["intent"],
-                    "recommended_answer": answer
+                    "recommended_answer": answer_resolved
                 })
         except Exception:
             continue
@@ -498,11 +603,13 @@ def run_question_discovery(state: AgentState) -> Dict[str, Any]:
             new_q = modifier.format(q=clean_q)
             
             new_q_clean = new_q.strip().replace("  ", " ")
-            if new_q_clean.lower() not in seen_texts:
-                seen_texts.add(new_q_clean.lower())
+            new_q_resolved = resolve_text_placeholders(new_q_clean, bi, state.get("website_url", ""))
+            
+            if new_q_resolved.lower() not in seen_texts:
+                seen_texts.add(new_q_resolved.lower())
                 
                 expanded_questions.append({
-                    "question": new_q_clean,
+                    "question": new_q_resolved,
                     "question_type": seed_item["question_type"],
                     "intent": seed_item["intent"],
                     "recommended_answer": seed_item["recommended_answer"]

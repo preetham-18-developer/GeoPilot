@@ -94,40 +94,11 @@ def download_report(report_id: str, format: str, user_id: str = Depends(get_curr
         if format.lower() == "json":
             return content
             
-        # Export as clean formatted Markdown
-        markdown_output = f"""# AI Visibility Optimization Report
-**Target Website**: {website_url}
-**Industry**: {content.get('industry', 'Other')}
-**Verified Facts Analyzed**: {content.get('total_verified_facts', 0)}
-**AI Questions Discovered**: {content.get('total_questions_discovered', 0)}
-**Keywords Clusters**: {content.get('total_keywords_strategized', 0)}
-
----
-
-## 1. Executive Summary
-{content.get('executive_summary', '')}
-
-## 2. Business Overview
-{content.get('business_overview', '')}
-
-## 3. Product Analysis
-{content.get('product_analysis', '')}
-
-## 4. Service Analysis
-{content.get('service_analysis', '')}
-
-## 5. Trust & Authority Analysis
-{content.get('trust_analysis', '')}
-
-## 6. SWOT Matrix
-* **Strengths**: {", ".join(content.get('swot', {}).get('strengths', []))}
-* **Weaknesses**: {", ".join(content.get('swot', {}).get('weaknesses', []))}
-* **Opportunities**: {", ".join(content.get('swot', {}).get('opportunities', []))}
-* **Threats**: {", ".join(content.get('swot', {}).get('threats', []))}
-
-## 7. AI Recommendation Engines Visibility Gaps
-{content.get('ai_visibility_analysis', '')}
-"""
+        # Generate rich Markdown report using ReportEngineV2
+        project_id = report_data["project_id"]
+        from app.core.report_engine_v2 import ReportEngineV2
+        engine = ReportEngineV2()
+        markdown_output = engine.generate_markdown(project_id)
         
         return PlainTextResponse(markdown_output.strip())
     except HTTPException:

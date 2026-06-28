@@ -67,9 +67,13 @@ Strict Quality & No-Hallucination Policy:
 - Do NOT make up new facts, strengths, reviews, or awards.
 - If information is missing for a section, return "NOT_FOUND" for string values, or an empty array [] for lists.
 - Avoid generic educational queries and meaningless permutations.
+- You are forbidden from using outside knowledge.
+- Use only supplied page content.
+- If information is unavailable, return UNKNOWN.
+- Do not infer founders, years, locations, industries, products, or services.
 
 Format your response as a valid JSON object. Do not wrap it in markdown code blocks. Format:
-{
+{{
   "company_name": "ABC Technologies",
   "industry": "EdTech",
   "description": "ABC Technologies provides cloud-based LMS solutions...",
@@ -84,7 +88,7 @@ Format your response as a valid JSON object. Do not wrap it in markdown code blo
   "trust_signals": ["ISO 27001 Certified", "4.8/5 G2 Rating"],
   "business_model": "B2B SaaS",
   "ai_visibility_opportunities": ["Implement structured schema markup for courses", "Build a dedicated FAQ section targeting conversational queries"],
-  "pre_query_discovery": {
+  "pre_query_discovery": {{
     "industry_topics": ["LMS Platforms", "Virtual Science Labs"],
     "industry_terminology": ["LTI Integration", "Active Learning"],
     "products": ["ABC Lab LMS"],
@@ -95,7 +99,7 @@ Format your response as a valid JSON object. Do not wrap it in markdown code blo
     "certifications": ["IMS Global Certified Integration"],
     "standards": ["LTI Compliant", "LMS standards"],
     "regulations": ["FERPA Compliance", "GDPR"],
-    "buyer_personas": {
+    "buyer_personas": {{
       "Founder": "NOT_FOUND",
       "CEO": "NOT_FOUND",
       "Director": "Director of Online Learning: Looks to scale lab courses efficiently without physical lab footprints.",
@@ -113,8 +117,8 @@ Format your response as a valid JSON object. Do not wrap it in markdown code blo
       "Technology Lead": "NOT_FOUND",
       "Facilities Manager": "NOT_FOUND",
       "Government Officer": "NOT_FOUND"
-    },
-    "pain_points": {
+    }},
+    "pain_points": {{
       "operational": "Physical lab resource limits and scheduling conflicts",
       "technical": "Complex LMS setups and grading integration issues",
       "financial": "High cost of physical lab equipment and maintenance",
@@ -124,8 +128,8 @@ Format your response as a valid JSON object. Do not wrap it in markdown code blo
       "trust": "Unsure if online labs are academically validated",
       "efficiency": "Hours spent manually grading paper-based lab reports",
       "compliance": "Ensuring student privacy compliance under FERPA"
-    },
-    "desired_outcomes": {
+    }},
+    "desired_outcomes": {{
       "increase_revenue": "NOT_FOUND",
       "reduce_cost": "Minimize lab equipment overhead and physical maintenance costs",
       "improve_efficiency": "Automate lab assignment grades and syllabus syncing",
@@ -135,18 +139,18 @@ Format your response as a valid JSON object. Do not wrap it in markdown code blo
       "security": "Secure SSO for students and staff via LTI",
       "compliance": "Fully compliant student records handling",
       "customer_satisfaction": "High retention and positive student course feedback"
-    },
-    "authority_sources": {
+    }},
+    "authority_sources": {{
       "research_papers": ["Study on Active Learning via Virtual Labs (2024)"],
       "industry_associations": ["IMS Global Learning Consortium"],
       "government_sources": ["US Department of Education FERPA guidelines"],
       "case_studies": ["How State University scaled science labs to 10k students"],
       "white_papers": ["The Future of WebGL Simulations in Higher Education"]
-    },
+    }},
     "competitor_topics": ["Hands-on lab kits", "Physical lab textbooks"],
     "content_gaps": ["No setup guides for Canvas integration", "Missing student lab workbook templates"]
-  }
-}
+  }}
+}}
 """
 
 class BusinessIntelligenceAgent:

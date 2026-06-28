@@ -1,8 +1,8 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { API_BASE } from "../lib/config";
 
-const API_BASE = "http://localhost:8000/api/v1";
 
 interface RecommendationIntelligenceTabProps {
   projectId: string;

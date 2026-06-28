@@ -27,8 +27,24 @@ from app.core.regression_engine import RegressionEngine
 from app.core.root_cause_engine import RootCauseEngine
 from app.core.coverage_heatmap_engine import CoverageHeatmapEngine
 from app.core.opportunity_engine_v2 import OpportunityEngineV2
+from app.core.topic_cluster_engine import TopicClusterEngine
+from app.core.content_blueprint_engine import ContentBlueprintEngine
+from app.core.authority_source_engine import AuthoritySourceEngine
+from app.core.faq_engine import FAQEngine
+from app.core.content_gap_engine_v2 import ContentGapEngineV2
+from app.core.internal_link_engine import InternalLinkEngine
+from app.core.schema_engine import SchemaRecommendationEngine
+from app.core.citation_probability_engine import CitationProbabilityEngine
 
 logger = logging.getLogger(__name__)
+
+def safe_float(val, default=0.0):
+    if val is None:
+        return default
+    try:
+        return float(val)
+    except (ValueError, TypeError):
+        return default
 
 def update_status(project_id: str, run_id: str, status: str, current_agent: str = None):
     """Helper to update status and current_agent in both projects and analysis_runs tables."""
@@ -60,173 +76,225 @@ def log_agent_run(project_id: str, agent_name: str, status: str, input_tokens: i
     except Exception as e:
         logger.error(f"Error logging agent run for {agent_name}: {e}")
 
-# Timing and token tracking wrappers for LangGraph nodes
-def fact_extractor_node(state: AgentState):
-    update_status(state["project_id"], state["run_id"], "extracting", "Fact Extractor")
-    start = time.time()
+from datetime import datetime, timezone
+from app.core.checkpoint_engine import CheckpointEngine
+from app.core.idempotency_engine import IdempotencyEngine
+from app.core.retry_engine import RetryEngine
+from app.core.agent_health_engine import AgentHealthEngine
+from app.core.timeline_engine import TimelineEngine
+
+checkpoint_eng = CheckpointEngine()
+idempotency_eng = IdempotencyEngine()
+retry_eng = RetryEngine()
+health_eng = AgentHealthEngine()
+timeline_eng = TimelineEngine()
+
+def execute_reliability_wrapper(
+    state: AgentState,
+    node_name: str,
+    run_func,
+    agent_status_name: str,
+    agent_display_name: str,
+    input_tokens: int,
+    output_tokens: int
+) -> AgentState:
+    run_id = state["run_id"]
+    project_id = state["project_id"]
+
+    # 1. Checkpoint skip check
+    if checkpoint_eng.has_completed_node(run_id, node_name):
+        logger.info(f"[Phase 8] Node {node_name} already completed in checkpoints. Loading state...")
+        checkpoint = checkpoint_eng.load_checkpoint(run_id)
+        if checkpoint and checkpoint.get("resume_data"):
+            # Update state with checkpoint resume data
+            state.update(checkpoint["resume_data"])
+        return state
+
+    # 2. Idempotency skip check
+    if idempotency_eng.already_processed(project_id, node_name, state):
+        logger.info(f"[Phase 8] Node {node_name} already processed (idempotency match). Saving checkpoint and skipping...")
+        checkpoint_eng.save_checkpoint(run_id, project_id, node_name, "completed", state)
+        return state
+
+    # 3. Mark running in checkpoints & update DB status
+    checkpoint_eng.save_checkpoint(run_id, project_id, node_name, "running", state)
+    update_status(project_id, run_id, agent_status_name, agent_display_name)
+    
+    started_at = datetime.now(timezone.utc)
+    success = False
+    
+    # 4. Run with Retry engine
     try:
-        res = run_fact_extractor(state)
-        duration = time.time() - start
-        log_agent_run(state["project_id"], "Extraction", "completed", input_tokens=2200, output_tokens=800, processing_time=duration)
-        return res
+        def run_wrapped():
+            return run_func(state)
+            
+        res_state = retry_eng.execute_with_retry(
+            project_id,
+            run_id,
+            node_name,
+            run_wrapped
+        )
+        
+        # Check if the returned value is a fallback default or a state dictionary
+        is_success = False
+        if isinstance(res_state, dict):
+            output_keys = [
+                "raw_facts", "verified_facts", "business_intelligence", "questions", "keywords", 
+                "competitors", "competitor_feature_matrix", "content_coverage", "ai_visibility_score", 
+                "content_opportunities", "recommendation_simulations", "report", "qa_report",
+                "entity_nodes", "entity_relationships", "gap_analysis", "project_id"
+            ]
+            if any(k in res_state for k in output_keys):
+                is_success = True
+                if "project_id" in res_state and "run_id" in res_state:
+                    state = res_state
+                else:
+                    state.update(res_state)
+                    
+        if not is_success:
+            logger.warning(f"[Phase 8] Degraded fallback default received for node {node_name}: {res_state}")
+            if "fact_extractor" in node_name:
+                state["raw_facts"] = res_state
+            elif "verifier" in node_name:
+                state["verified_facts"] = res_state
+            elif "business_intelligence" in node_name:
+                state["business_intelligence"] = res_state
+            elif "question_discovery" in node_name:
+                state["questions"] = res_state
+            elif "keyword_intelligence" in node_name:
+                state["keywords"] = res_state
+            elif "competitor_discovery" in node_name:
+                state["competitors"] = res_state
+            elif "content_coverage" in node_name:
+                state["content_coverage"] = res_state
+            elif "visibility_scoring" in node_name:
+                state["ai_visibility_score"] = res_state
+            elif "content_agent" in node_name:
+                state["content_opportunities"] = res_state
+            elif "recommendation_sim" in node_name:
+                state["recommendation_simulations"] = res_state
+            elif "report_compiler" in node_name:
+                state["report"] = res_state
+            elif "qa_agent" in node_name:
+                state["qa_report"] = res_state
+
+        completed_at = datetime.now(timezone.utc)
+        duration_ms = int((completed_at - started_at).total_seconds() * 1000)
+        success = True
+        
+        # Save completed checkpoint
+        checkpoint_eng.save_checkpoint(run_id, project_id, node_name, "completed", state)
+        
+        # Record timeline
+        timeline_eng.record_node_duration(run_id, node_name, started_at, completed_at, duration_ms)
+        
+        # Log agent health
+        health_eng.log_health(
+            project_id=project_id,
+            run_id=run_id,
+            agent_name=node_name,
+            duration_ms=duration_ms,
+            success=True,
+            llm_calls=1,
+            cache_hits=0,
+            cache_misses=1
+        )
+        
+        # Log agent run to agent_runs
+        log_agent_run(project_id, agent_display_name, "completed", input_tokens=input_tokens, output_tokens=output_tokens, processing_time=duration_ms/1000.0)
+        
+        return state
+
     except Exception as e:
-        duration = time.time() - start
-        log_agent_run(state["project_id"], "Extraction", "failed", input_tokens=2200, output_tokens=0, processing_time=duration, error_message=str(e))
-        raise
+        completed_at = datetime.now(timezone.utc)
+        duration_ms = int((completed_at - started_at).total_seconds() * 1000)
+        
+        # Save checkpoint as failed
+        checkpoint_eng.save_checkpoint(run_id, project_id, node_name, "failed", state)
+        
+        # Record timeline
+        timeline_eng.record_node_duration(run_id, node_name, started_at, completed_at, duration_ms)
+        
+        # Log health
+        health_eng.log_health(
+            project_id=project_id,
+            run_id=run_id,
+            agent_name=node_name,
+            duration_ms=duration_ms,
+            success=False,
+            warning_count=1
+        )
+        
+        # Log agent run to agent_runs
+        log_agent_run(project_id, agent_display_name, "failed", input_tokens=input_tokens, output_tokens=0, processing_time=duration_ms/1000.0, error_message=str(e))
+        
+        raise e
+
+# Wrapped Node Functions
+def fact_extractor_node(state: AgentState):
+    return execute_reliability_wrapper(
+        state, "fact_extractor", run_fact_extractor, "extracting", "Fact Extractor", 2200, 800
+    )
 
 def verifier_node(state: AgentState):
-    update_status(state["project_id"], state["run_id"], "verifying", "Verifier")
-    start = time.time()
-    try:
-        res = run_verifier(state)
-        duration = time.time() - start
-        log_agent_run(state["project_id"], "Verification", "completed", input_tokens=3500, output_tokens=1000, processing_time=duration)
-        return res
-    except Exception as e:
-        duration = time.time() - start
-        log_agent_run(state["project_id"], "Verification", "failed", input_tokens=3500, output_tokens=0, processing_time=duration, error_message=str(e))
-        raise
+    return execute_reliability_wrapper(
+        state, "verifier", run_verifier, "verifying", "Verifier", 3500, 1000
+    )
 
 def business_intelligence_node(state: AgentState):
-    update_status(state["project_id"], state["run_id"], "analyzing", "Business Intelligence")
-    start = time.time()
-    try:
-        res = run_business_intelligence(state)
-        duration = time.time() - start
-        log_agent_run(state["project_id"], "Business Intelligence", "completed", input_tokens=1800, output_tokens=600, processing_time=duration)
-        return res
-    except Exception as e:
-        duration = time.time() - start
-        log_agent_run(state["project_id"], "Business Intelligence", "failed", input_tokens=1800, output_tokens=0, processing_time=duration, error_message=str(e))
-        raise
-
-def question_discovery_node(state: AgentState):
-    update_status(state["project_id"], state["run_id"], "analyzing", "Question Discovery")
-    start = time.time()
-    try:
-        res = run_question_discovery(state)
-        duration = time.time() - start
-        log_agent_run(state["project_id"], "Question Discovery", "completed", input_tokens=1600, output_tokens=500, processing_time=duration)
-        return res
-    except Exception as e:
-        duration = time.time() - start
-        log_agent_run(state["project_id"], "Question Discovery", "failed", input_tokens=1600, output_tokens=0, processing_time=duration, error_message=str(e))
-        raise
-
-def keyword_intelligence_node(state: AgentState):
-    update_status(state["project_id"], state["run_id"], "analyzing", "Keyword Agent")
-    start = time.time()
-    try:
-        res = run_keyword_intelligence(state)
-        duration = time.time() - start
-        log_agent_run(state["project_id"], "Keyword Agent", "completed", input_tokens=1400, output_tokens=400, processing_time=duration)
-        return res
-    except Exception as e:
-        duration = time.time() - start
-        log_agent_run(state["project_id"], "Keyword Agent", "failed", input_tokens=1400, output_tokens=0, processing_time=duration, error_message=str(e))
-        raise
-
-def competitor_discovery_node(state: AgentState):
-    update_status(state["project_id"], state["run_id"], "analyzing", "Competitor Agent")
-    start = time.time()
-    try:
-        res = run_competitor_discovery(state)
-        duration = time.time() - start
-        log_agent_run(state["project_id"], "Competitor Agent", "completed", input_tokens=1500, output_tokens=450, processing_time=duration)
-        return res
-    except Exception as e:
-        duration = time.time() - start
-        log_agent_run(state["project_id"], "Competitor Agent", "failed", input_tokens=1500, output_tokens=0, processing_time=duration, error_message=str(e))
-        raise
-
-def content_agent_node(state: AgentState):
-    update_status(state["project_id"], state["run_id"], "analyzing", "Content Agent")
-    start = time.time()
-    try:
-        res = run_content_agent(state)
-        duration = time.time() - start
-        log_agent_run(state["project_id"], "Content Agent", "completed", input_tokens=1700, output_tokens=550, processing_time=duration)
-        return res
-    except Exception as e:
-        duration = time.time() - start
-        log_agent_run(state["project_id"], "Content Agent", "failed", input_tokens=1700, output_tokens=0, processing_time=duration, error_message=str(e))
-        raise
-
-def report_compiler_node(state: AgentState):
-    update_status(state["project_id"], state["run_id"], "compiling", "Report Compiler")
-    start = time.time()
-    try:
-        res = compile_report(state)
-        duration = time.time() - start
-        # Report compiler is local format formatting, count as completed
-        return res
-    except Exception:
-        raise
-
-def qa_agent_node(state: AgentState):
-    update_status(state["project_id"], state["run_id"], "compiling", "Quality Assurance")
-    start = time.time()
-    try:
-        res = run_qa_agent(state)
-        duration = time.time() - start
-        log_agent_run(state["project_id"], "Quality Assurance", "completed", input_tokens=4000, output_tokens=300, processing_time=duration)
-        return res
-    except Exception as e:
-        duration = time.time() - start
-        log_agent_run(state["project_id"], "Quality Assurance", "failed", input_tokens=4000, output_tokens=0, processing_time=duration, error_message=str(e))
-        raise
+    return execute_reliability_wrapper(
+        state, "business_intelligence_agent", run_business_intelligence, "analyzing", "Business Intelligence", 1800, 600
+    )
 
 def entity_graph_node(state: AgentState):
-    update_status(state["project_id"], state["run_id"], "analyzing", "Entity Graph")
-    start = time.time()
-    try:
-        res = run_entity_graph(state)
-        duration = time.time() - start
-        log_agent_run(state["project_id"], "Entity Graph", "completed", input_tokens=1500, output_tokens=400, processing_time=duration)
-        return res
-    except Exception as e:
-        duration = time.time() - start
-        log_agent_run(state["project_id"], "Entity Graph", "failed", input_tokens=1500, output_tokens=0, processing_time=duration, error_message=str(e))
-        raise
+    return execute_reliability_wrapper(
+        state, "entity_graph", run_entity_graph, "analyzing", "Entity Graph", 1500, 400
+    )
 
-def recommendation_sim_node(state: AgentState):
-    update_status(state["project_id"], state["run_id"], "analyzing", "Recommendation Sim")
-    start = time.time()
-    try:
-        res = run_recommendation_sim(state)
-        duration = time.time() - start
-        log_agent_run(state["project_id"], "Recommendation Sim", "completed", input_tokens=1800, output_tokens=500, processing_time=duration)
-        return res
-    except Exception as e:
-        duration = time.time() - start
-        log_agent_run(state["project_id"], "Recommendation Sim", "failed", input_tokens=1800, output_tokens=0, processing_time=duration, error_message=str(e))
-        raise
+def question_discovery_node(state: AgentState):
+    return execute_reliability_wrapper(
+        state, "question_discovery", run_question_discovery, "analyzing", "Question Discovery", 1600, 500
+    )
+
+def keyword_intelligence_node(state: AgentState):
+    return execute_reliability_wrapper(
+        state, "keyword_intelligence", run_keyword_intelligence, "analyzing", "Keyword Agent", 1400, 400
+    )
+
+def competitor_discovery_node(state: AgentState):
+    return execute_reliability_wrapper(
+        state, "competitor_discovery", run_competitor_discovery, "analyzing", "Competitor Agent", 1500, 450
+    )
 
 def content_coverage_node(state: AgentState):
-    update_status(state["project_id"], state["run_id"], "analyzing", "Content Coverage")
-    start = time.time()
-    try:
-        res = run_content_coverage(state)
-        duration = time.time() - start
-        log_agent_run(state["project_id"], "Content Coverage", "completed", input_tokens=1600, output_tokens=450, processing_time=duration)
-        return res
-    except Exception as e:
-        duration = time.time() - start
-        log_agent_run(state["project_id"], "Content Coverage", "failed", input_tokens=1600, output_tokens=0, processing_time=duration, error_message=str(e))
-        raise
+    return execute_reliability_wrapper(
+        state, "content_coverage_eval", run_content_coverage, "analyzing", "Content Coverage", 1600, 450
+    )
 
 def visibility_scoring_node(state: AgentState):
-    update_status(state["project_id"], state["run_id"], "analyzing", "Visibility Score")
-    start = time.time()
-    try:
-        res = run_visibility_scoring(state)
-        duration = time.time() - start
-        log_agent_run(state["project_id"], "Visibility Score", "completed", input_tokens=2000, output_tokens=600, processing_time=duration)
-        return res
-    except Exception as e:
-        duration = time.time() - start
-        log_agent_run(state["project_id"], "Visibility Score", "failed", input_tokens=2000, output_tokens=0, processing_time=duration, error_message=str(e))
-        raise
+    return execute_reliability_wrapper(
+        state, "visibility_scoring", run_visibility_scoring, "analyzing", "Visibility Score", 2000, 600
+    )
+
+def content_agent_node(state: AgentState):
+    return execute_reliability_wrapper(
+        state, "content_agent", run_content_agent, "analyzing", "Content Agent", 1700, 550
+    )
+
+def recommendation_sim_node(state: AgentState):
+    return execute_reliability_wrapper(
+        state, "recommendation_sim", run_recommendation_sim, "analyzing", "Recommendation Sim", 1800, 500
+    )
+
+def report_compiler_node(state: AgentState):
+    return execute_reliability_wrapper(
+        state, "report_compiler", compile_report, "compiling", "Report Compiler", 1000, 1000
+    )
+
+def qa_agent_node(state: AgentState):
+    return execute_reliability_wrapper(
+        state, "qa_agent", run_qa_agent, "compiling", "Quality Assurance", 4000, 300
+    )
 
 # Initialize the state graph builder
 workflow = StateGraph(AgentState)
@@ -282,50 +350,123 @@ async def run_analysis_pipeline(project_id: str, run_id: str, website_url: str):
     start_run_time = time.time()
     
     try:
-        # 0. Clean up stale analysis data from previous runs for this project
-        # Respects FK constraint: verified_facts → extracted_facts
-        logger.info(f"Cleaning up stale analysis data for project {project_id}...")
+        # Check if this is a resume execution
+        completed_nodes = checkpoint_eng.get_completed_nodes(run_id)
+        is_resume = len(completed_nodes) > 0
         
-        # First: delete verified_facts linked to this project's extracted_facts (FK constraint)
-        try:
-            from app.core.supabase import supabase_client as sb
-            sb.rpc("delete_verified_facts_for_project", {"p_project_id": project_id}).execute()
-        except Exception:
-            # Fallback: raw SQL via postgrest if RPC not available
+        if is_resume:
+            logger.info(f"Resume run detected for {run_id}. Skipping stale data cleanup...")
+            # Also log recovery history
             try:
-                supabase_client.table("verified_facts").delete().in_(
-                    "extracted_fact_id",
-                    [f["id"] for f in (supabase_client.table("extracted_facts").select("id").eq("project_id", project_id).execute().data or [])]
-                ).execute()
-            except Exception as e:
-                logger.warning(f"verified_facts cleanup warning: {e}")
-        
-        # Tables that have project_id column — clean in FK-safe order
-        cleanup_tables = [
-            "extracted_facts",       # After verified_facts (FK dependency)
-            "business_profiles",
-            "questions",
-            "keywords",
-            "competitors",
-            "competitor_feature_matrix",
-            "content_opportunities",
-            "gap_analysis",
-            "ai_visibility_tracking",
-            "recommendation_simulations",
-            "entity_nodes",
-            "entity_relationships",
-            "content_coverage",
-            "reports",
-            "qa_reports",
-            "extraction_failures",
-        ]
-        for table in cleanup_tables:
-            try:
-                supabase_client.table(table).delete().eq("project_id", project_id).execute()
-            except Exception as e:
-                logger.warning(f"Cleanup warning for {table}: {e}")
+                node_sequence = [
+                    "fact_extractor", "verifier", "business_intelligence_agent", "entity_graph",
+                    "question_discovery", "keyword_intelligence", "competitor_discovery",
+                    "content_coverage_eval", "visibility_scoring", "content_agent",
+                    "recommendation_sim", "report_compiler", "qa_agent"
+                ]
+                failed_node = "unknown"
+                resumed_node = "unknown"
+                for node in node_sequence:
+                    if node not in completed_nodes:
+                        resumed_node = node
+                        break
+                
+                failed_resp = supabase_client.table("execution_checkpoints")\
+                    .select("node_name")\
+                    .eq("run_id", run_id)\
+                    .eq("status", "failed")\
+                    .order("created_at", desc=True)\
+                    .limit(1)\
+                    .execute()
+                if failed_resp.data:
+                    failed_node = failed_resp.data[0]["node_name"]
+                
+                supabase_client.table("recovery_history").insert({
+                    "run_id": run_id,
+                    "failed_node": failed_node,
+                    "resumed_node": resumed_node,
+                    "success": True,
+                    "retry_count": len(completed_nodes)
+                }).execute()
+            except Exception as rh_err:
+                logger.warning(f"Error logging recovery history: {rh_err}")
+        else:
+            # 0. Clean up stale analysis data from previous runs for this project
+            # Respects FK constraint: verified_facts → extracted_facts
+            logger.info(f"Cleaning up stale analysis data for project {project_id}...")
             
-        logger.info("Cleanup complete. Fetching crawled pages...")
+            # First: delete verified_facts linked to this project's extracted_facts (FK constraint)
+            try:
+                from app.core.supabase import supabase_client as sb
+                sb.rpc("delete_verified_facts_for_project", {"p_project_id": project_id}).execute()
+            except Exception:
+                # Fallback: raw SQL via postgrest if RPC not available
+                try:
+                    supabase_client.table("verified_facts").delete().in_(
+                        "extracted_fact_id",
+                        [f["id"] for f in (supabase_client.table("extracted_facts").select("id").eq("project_id", project_id).execute().data or [])]
+                    ).execute()
+                except Exception as e:
+                    logger.warning(f"verified_facts cleanup warning: {e}")
+            
+            # Tables that have project_id column — clean in FK-safe order
+            cleanup_tables = [
+                "extracted_facts",       # After verified_facts (FK dependency)
+                "business_profiles",
+                "questions",
+                "keywords",
+                "competitors",
+                "competitor_feature_matrix",
+                "content_opportunities",
+                "gap_analysis",
+                "ai_visibility_tracking",
+                "recommendation_simulations",
+                "entity_nodes",
+                "entity_relationships",
+                "content_coverage",
+                "reports",
+                "qa_reports",
+                "extraction_failures",
+                "topic_clusters",
+                "content_blueprints",
+                "authority_sources",
+                "faq_clusters",
+                "content_gap_reports_v2",
+                "internal_link_maps",
+                "schema_recommendations",
+                "citation_predictions",
+                # Phase 8 tables:
+                "execution_checkpoints",
+                "agent_health_logs",
+                "error_diagnostics",
+                "reliability_reports",
+                "retry_reports",
+                "fallback_reports",
+                # Phase 9 tables:
+                "citation_reports",
+                "recommendation_gaps",
+                "authority_entities",
+                "recommendation_competitor_analysis",
+                # Phase 10 tables:
+                "optimization_plans",
+                "strategy_simulations",
+                "roi_reports",
+                "optimization_history",
+                # Phase 11 tables:
+                "execution_tasks",
+                "generated_assets",
+                "execution_results",
+                "learning_memory"
+            ]
+            for table in cleanup_tables:
+                try:
+                    supabase_client.table(table).delete().eq("project_id", project_id).execute()
+                except Exception as e:
+                    logger.warning(f"Cleanup warning for {table}: {e}")
+                
+            logger.info("Cleanup complete.")
+
+        logger.info("Fetching crawled pages...")
 
 
         # 1. Fetch crawled page contents from Supabase web_pages table
@@ -403,7 +544,52 @@ async def run_analysis_pipeline(project_id: str, run_id: str, website_url: str):
         loop = asyncio.get_event_loop()
         final_state = await loop.run_in_executor(None, lambda: run_with_ctx(current_client, initial_state))
 
+        # 3.4 Domain Identity Check (Phase 12)
+        from app.core.domain_identity_validator import DomainIdentityValidator
+        identity_validator = DomainIdentityValidator()
+        identity_res = identity_validator.validate(project_id, final_state)
         
+        # Abort pipeline early if identity score < 80%
+        if identity_res["identity_match_score"] < 80.0:
+            logger.error(f"[Pipeline] Identity check failed with score {identity_res['identity_match_score']:.1f}%. Aborting execution.")
+            total_duration = time.time() - start_run_time
+            supabase_client.table("analysis_runs").update({
+                "status": "FAILED_VALIDATION",
+                "error_message": f"Identity score {identity_res['identity_match_score']:.1f}% is below threshold 80%: {'; '.join(identity_res['identity_conflicts'])}",
+                "completed_at": "now()",
+                "processing_time": total_duration,
+                "current_agent": None
+            }).eq("id", run_id).execute()
+            
+            supabase_client.table("projects").update({
+                "status": "FAILED_VALIDATION",
+                "current_agent": None
+            }).eq("id", project_id).execute()
+            return
+
+        # 3.5 Grounding Verification Check V2 (Phase 12)
+        from app.core.grounding_engine_v2 import GroundingEngineV2
+        grounding_engine = GroundingEngineV2()
+        grounding_res = grounding_engine.run(final_state, identity_res)
+        
+        # Abort pipeline early if grounding score is < 80% or if domain collision is found
+        if grounding_res["grounding_score"] < 80.0 or grounding_res["details"]["domain_conflicts"] > 0:
+            logger.error(f"[Pipeline] Grounding check failed with score {grounding_res['grounding_score']:.1f}%. Aborting execution.")
+            total_duration = time.time() - start_run_time
+            supabase_client.table("analysis_runs").update({
+                "status": "FAILED_GROUNDING",
+                "error_message": f"Grounding check failed: score {grounding_res['grounding_score']:.1f}%, TLD/domain conflicts = {grounding_res['details']['domain_conflicts']}",
+                "completed_at": "now()",
+                "processing_time": total_duration,
+                "current_agent": None
+            }).eq("id", run_id).execute()
+            
+            supabase_client.table("projects").update({
+                "status": "FAILED_GROUNDING",
+                "current_agent": None
+            }).eq("id", project_id).execute()
+            return
+
         # 4. Save results to Database
         # A. Save raw extracted facts
         raw_facts = final_state.get("raw_facts", [])
@@ -706,7 +892,7 @@ async def run_analysis_pipeline(project_id: str, run_id: str, website_url: str):
                     "fact_value": vf.get("fact_value", ""),
                     "fact_key": vf.get("fact_key", ""),
                     "evidence": vf.get("evidence_text", ""),
-                    "confidence_score": float(vf.get("confidence_score", 1.0)),
+                    "confidence_score": safe_float(vf.get("confidence_score"), 1.0),
                     "source_url": vf.get("source_url", "")
                 })
 
@@ -720,19 +906,20 @@ async def run_analysis_pipeline(project_id: str, run_id: str, website_url: str):
                 "crawled_pages": final_state.get("crawled_pages", []) or [],
                 "content_opportunities": final_state.get("content_opportunities", []) or [],
                 "entity_nodes": final_state.get("entity_nodes", []) or [],
+                "entity_relationships": final_state.get("entity_relationships", []) or [],
                 "gap_analysis": final_state.get("gap_analysis", []) or []
             }
 
             vis_score = final_state.get("ai_visibility_score", {}) or {}
-            visibility_val = float(vis_score.get("overall_score", 0.0))
+            visibility_val = safe_float(vis_score.get("overall_score", 0.0))
 
             sub_scores = vis_score.get("sub_scores", {}) or {}
-            coverage_val = float(sub_scores.get("content_coverage", 0.0))
+            coverage_val = safe_float(sub_scores.get("content_coverage", 0.0))
 
             try:
                 rec_engine = RecommendationEngineV2()
                 rec_res = rec_engine.run(project_data_payload)
-                recommendation_val = float(rec_res.get("overall_recommendation_score", 0.0))
+                recommendation_val = safe_float(rec_res.get("overall_recommendation_score", 0.0))
             except Exception as rec_err:
                 logger.warning(f"Error computing recommendation score for history: {rec_err}")
                 recommendation_val = 0.0
@@ -740,7 +927,7 @@ async def run_analysis_pipeline(project_id: str, run_id: str, website_url: str):
             try:
                 det = HallucinationDetector()
                 det_res = det.detect(project_data_payload)
-                risk_score = float(det_res.get("hallucination_risk_score", 0.0))
+                risk_score = safe_float(det_res.get("hallucination_risk_score", 0.0))
                 hallucination_val = max(0.0, 100.0 - risk_score)
             except Exception as det_err:
                 logger.warning(f"Error computing hallucination score for history: {det_err}")
@@ -748,20 +935,20 @@ async def run_analysis_pipeline(project_id: str, run_id: str, website_url: str):
 
             try:
                 cons_engine = KnowledgeConsistencyEngine()
-                cons_res = cons_engine.run(project_data_payload)
-                consistency_val = float(cons_res.get("consistency_score", 0.0))
+                cons_res = cons_engine.analyze(project_data_payload)
+                consistency_val = safe_float(cons_res.get("consistency_score", 0.0))
             except Exception as cons_err:
                 logger.warning(f"Error computing consistency score for history: {cons_err}")
                 consistency_val = 100.0
 
             # Calculate Phase 6 scores
-            grounding_val = sum(float(f.get("verification_score", 0.0)) for f in verified_facts) / len(verified_facts) if verified_facts else 100.0
+            grounding_val = safe_float(grounding_res.get("grounding_score", 0.0))
             
             q_list = project_data_payload.get("questions") or []
-            question_quality_val = sum(float(q.get("priority_score", 0.0)) for q in q_list) / len(q_list) if q_list else 0.0
+            question_quality_val = sum(safe_float(q.get("priority_score", 0.0)) for q in q_list) / len(q_list) if q_list else 0.0
 
             kw_list = project_data_payload.get("keywords") or []
-            keyword_quality_val = sum(float(k.get("recommendation_value", 0.0)) for k in kw_list) / len(kw_list) if kw_list else 0.0
+            keyword_quality_val = sum(safe_float(k.get("recommendation_value", 0.0)) for k in kw_list) / len(kw_list) if kw_list else 0.0
 
             # Save historical metrics record
             supabase_client.table("historical_metrics").insert({
@@ -777,42 +964,277 @@ async def run_analysis_pipeline(project_id: str, run_id: str, website_url: str):
                 "keyword_quality": round(keyword_quality_val, 1)
             }).execute()
             logger.info(f"Successfully recorded historical metrics for project {project_id}, run {run_id}.")
-
-            # Execute Phase 6 Analytics Engines
-            current_scores = {
-                "visibility_score": visibility_val,
-                "recommendation_score": recommendation_val,
-                "hallucination_score": hallucination_val,
-                "consistency_score": consistency_val,
-                "coverage_score": coverage_val,
-                "grounding_score": grounding_val,
-                "question_quality": question_quality_val,
-                "keyword_quality": keyword_quality_val
-            }
-
-            try:
-                # 1. Regressions
-                reg_eng = RegressionEngine()
-                reg_eng.run(project_id, run_id, current_scores)
-                
-                # 2. Root Causes
-                rc_eng = RootCauseEngine()
-                rc_eng.run(project_id, run_id, current_scores)
-                
-                # 3. Heatmap
-                hm_eng = CoverageHeatmapEngine()
-                heatmap_data = hm_eng.run(project_id, run_id, project_data_payload)
-                
-                # 4. Opportunities V2
-                opp_eng = OpportunityEngineV2()
-                opp_eng.run(project_id, run_id, heatmap_data)
-                
-                logger.info(f"Phase 6 Advanced Analytics engines executed successfully for project {project_id}.")
-            except Exception as eng_err:
-                logger.error(f"Error running Phase 6 Advanced Analytics engines: {eng_err}")
-
         except Exception as hist_err:
-            logger.error(f"Failed to save historical metrics or run analytics: {hist_err}")
+            logger.error(f"Failed to save historical metrics: {hist_err}")
+
+        # Ensure project payload and basic scores are resolved for downstream engines
+        bp_bi = final_state.get("business_intelligence", {}) or {}
+        bp = {
+            "company_name": bp_bi.get("company_name", "Unknown"),
+            "industry": bp_bi.get("industry", "Unknown"),
+            "description": bp_bi.get("description", "NOT FOUND"),
+            "mission": bp_bi.get("mission", "NOT FOUND"),
+            "vision": bp_bi.get("vision", "NOT FOUND"),
+            "usp": bp_bi.get("usp", "NOT FOUND"),
+            "target_audience": bp_bi.get("target_audience", "NOT FOUND"),
+            "strengths": bp_bi.get("strengths", []),
+            "weaknesses": bp_bi.get("weaknesses", []),
+            "opportunities": bp_bi.get("opportunities", []),
+            "risks": bp_bi.get("risks", []),
+            "trust_signals": bp_bi.get("trust_signals", []),
+            "business_model": bp_bi.get("business_model", "NOT_FOUND"),
+            "ai_visibility_opportunities": bp_bi.get("ai_visibility_opportunities", []),
+            "pre_query_discovery": bp_bi.get("pre_query_discovery", {})
+        }
+        verified_facts_raw = final_state.get("verified_facts", []) or []
+        verified_facts = []
+        for vf in verified_facts_raw:
+            verified_facts.append({
+                "fact_type": vf.get("fact_category", "general"),
+                "fact_value": vf.get("fact_value", ""),
+                "fact_key": vf.get("fact_key", ""),
+                "evidence": vf.get("evidence_text", ""),
+                "confidence_score": safe_float(vf.get("confidence_score"), 1.0),
+                "source_url": vf.get("source_url", "")
+            })
+        project_data_payload = {
+            "business_profile": bp,
+            "verified_facts": verified_facts,
+            "questions": final_state.get("questions", []) or [],
+            "keywords": final_state.get("keywords", []) or [],
+            "competitors": final_state.get("competitors", []) or [],
+            "content_coverage": final_state.get("content_coverage", []) or [],
+            "crawled_pages": final_state.get("crawled_pages", []) or [],
+            "content_opportunities": final_state.get("content_opportunities", []) or [],
+            "entity_nodes": final_state.get("entity_nodes", []) or [],
+            "entity_relationships": final_state.get("entity_relationships", []) or [],
+            "gap_analysis": final_state.get("gap_analysis", []) or []
+        }
+        vis_score = final_state.get("ai_visibility_score", {}) or {}
+        visibility_val = safe_float(vis_score.get("overall_score", 0.0))
+        sub_scores = vis_score.get("sub_scores", {}) or {}
+        coverage_val = safe_float(sub_scores.get("content_coverage", 0.0))
+        grounding_val = safe_float(grounding_res.get("grounding_score", 0.0))
+        q_list = project_data_payload.get("questions") or []
+        question_quality_val = sum(safe_float(q.get("priority_score", 0.0)) for q in q_list) / len(q_list) if q_list else 0.0
+        kw_list = project_data_payload.get("keywords") or []
+        keyword_quality_val = sum(safe_float(k.get("recommendation_value", 0.0)) for k in kw_list) / len(kw_list) if kw_list else 0.0
+
+        # Execute Phase 6 Analytics Engines
+        current_scores = {
+            "visibility_score": visibility_val,
+            "recommendation_score": 0.0,
+            "hallucination_score": 100.0,
+            "consistency_score": 100.0,
+            "coverage_score": coverage_val,
+            "grounding_score": grounding_val,
+            "question_quality": question_quality_val,
+            "keyword_quality": keyword_quality_val
+        }
+        try:
+            rec_engine = RecommendationEngineV2()
+            rec_res = rec_engine.run(project_data_payload)
+            current_scores["recommendation_score"] = safe_float(rec_res.get("overall_recommendation_score", 0.0))
+        except Exception:
+            pass
+        try:
+            det = HallucinationDetector()
+            det_res = det.detect(project_data_payload)
+            risk_score = safe_float(det_res.get("hallucination_risk_score", 0.0))
+            current_scores["hallucination_score"] = max(0.0, 100.0 - risk_score)
+        except Exception:
+            pass
+        try:
+            cons_engine = KnowledgeConsistencyEngine()
+            cons_res = cons_engine.analyze(project_data_payload)
+            current_scores["consistency_score"] = safe_float(cons_res.get("consistency_score", 0.0))
+        except Exception:
+            pass
+
+        heatmap_data = {}
+        try:
+            logger.info("Executing Phase 6 Analytics Engines...")
+            reg_eng = RegressionEngine()
+            reg_eng.run(project_id, run_id, current_scores)
+            
+            rc_eng = RootCauseEngine()
+            rc_eng.run(project_id, run_id, current_scores)
+            
+            hm_eng = CoverageHeatmapEngine()
+            heatmap_data = hm_eng.run(project_id, run_id, project_data_payload)
+            
+            opp_eng = OpportunityEngineV2()
+            opp_eng.run(project_id, run_id, heatmap_data)
+        except Exception as p6_err:
+            logger.error(f"Error running Phase 6 Analytics Engines: {p6_err}")
+
+        # --- Phase 7 Content Intelligence Engines ---
+        logger.info(f"Executing Phase 7 Content Intelligence engines for project {project_id}...")
+        try:
+            tc_eng = TopicClusterEngine()
+            tc_eng.run(project_id, run_id, project_data_payload)
+            
+            cb_eng = ContentBlueprintEngine()
+            cb_eng.run(project_id, run_id, project_data_payload, heatmap_data)
+            
+            as_eng = AuthoritySourceEngine()
+            as_eng.run(project_id, run_id, project_data_payload)
+            
+            faq_eng = FAQEngine()
+            faq_eng.run(project_id, run_id, project_data_payload)
+            
+            cg_eng = ContentGapEngineV2()
+            cg_eng.run(project_id, run_id, project_data_payload, heatmap_data)
+            
+            il_eng = InternalLinkEngine()
+            il_eng.run(project_id, run_id, project_data_payload)
+            
+            sc_eng = SchemaRecommendationEngine()
+            sc_eng.run(project_id, run_id, project_data_payload)
+            
+            cp_eng = CitationProbabilityEngine()
+            cp_eng.run(project_id, run_id, project_data_payload)
+            
+            logger.info(f"Phase 7 Content Intelligence engines executed successfully for project {project_id}.")
+        except Exception as p7_err:
+            logger.error(f"Error running Phase 7 Content Intelligence engines: {p7_err}")
+
+        # --- Phase 9 GEO Citation & Recommendation Intelligence Layer ---
+        logger.info(f"Executing Phase 9 GEO Citation & Recommendation Intelligence engines for project {project_id}...")
+        try:
+            from app.core.citation_engine import CitationEngine
+            from app.core.authority_engine_v2 import AuthorityEngineV2
+            from app.core.recommendation_gap_engine import RecommendationGapEngine
+            from app.core.competitor_recommendation_engine import CompetitorRecommendationEngine
+            from app.core.geo_readiness_engine import GEOReadinessEngine
+            
+            cit_eng = CitationEngine()
+            cit_eng.run(project_id, project_data_payload)
+            
+            auth_v2 = AuthorityEngineV2()
+            auth_v2.run(project_id, project_data_payload)
+            
+            rec_gap = RecommendationGapEngine()
+            rec_gap.run(project_id, project_data_payload)
+            
+            comp_rec = CompetitorRecommendationEngine()
+            comp_rec.run(project_id, project_data_payload)
+            
+            geo_read = GEOReadinessEngine()
+            geo_read.run(project_id, project_data_payload)
+            
+            logger.info("Phase 9 GEO Engines completed successfully.")
+        except Exception as p9_err:
+            logger.error(f"Error running Phase 9 GEO Engines: {p9_err}")
+
+        # --- Phase 10 Autonomous Optimization & Strategy Intelligence Layer ---
+        logger.info(f"Executing Phase 10 Autonomous Optimization & Strategy Intelligence engines for project {project_id}...")
+        try:
+            from app.core.optimization_engine import OptimizationEngine
+            from app.core.geo_projection_engine import GEOProjectionEngine
+            from app.core.roi_engine import ROIEngine
+            
+            opt_eng = OptimizationEngine()
+            plans = opt_eng.run(project_id, project_data_payload)
+            
+            proj_eng = GEOProjectionEngine()
+            proj_eng.run(project_id, project_data_payload, plans)
+            
+            roi_eng = ROIEngine()
+            roi_eng.run(project_id, plans)
+            
+            logger.info("Phase 10 GEO Engines completed successfully.")
+        except Exception as p10_err:
+            logger.error(f"Error running Phase 10 GEO Engines: {p10_err}")
+            plans = []
+
+        # --- Phase 11 Autonomous GEO Execution Layer ---
+        logger.info(f"Executing Phase 11 Autonomous GEO Execution Layer engines for project {project_id}...")
+        try:
+            from app.core.execution_engine import ExecutionEngine
+            
+            plans_resp = supabase_client.table("optimization_plans")\
+                .select("*")\
+                .eq("project_id", project_id)\
+                .execute()
+            active_plans = plans_resp.data or []
+            
+            exec_eng = ExecutionEngine()
+            exec_eng.run(project_id, active_plans)
+            
+            logger.info("Phase 11 GEO Engines completed successfully.")
+        except Exception as p11_err:
+            logger.error(f"Error running Phase 11 GEO Engines: {p11_err}")
+
+        # Compute Reliability Score (Phase 8)
+        try:
+            from app.core.reliability_score_engine import ReliabilityScoreEngine
+            rel_eng = ReliabilityScoreEngine()
+            rel_eng.compute_and_save(project_id, run_id)
+        except Exception as rel_err:
+            logger.error(f"Error computing reliability report score: {rel_err}")
+
+        # Phase 12 Production Gate Validation Check (Phase 12)
+        logger.info("Executing Phase 12 Production Gate Validation Check...")
+        
+        # 1. Run Intelligence Validator
+        from app.core.intelligence_validator import IntelligenceValidator
+        intel_validator = IntelligenceValidator()
+        intel_res = intel_validator.validate(project_id, final_state)
+        
+        # 2. Check report integrity
+        report_data = final_state.get("report", {})
+        report_integrity = "PASS" if (report_data and len(report_data) > 0) else "FAIL"
+        
+        grounding_score = grounding_res.get("grounding_score", 0.0)
+        identity_score = identity_res.get("identity_match_score", 0.0)
+        q_integrity = intel_res.get("question_integrity", "FAIL")
+        k_integrity = intel_res.get("keyword_integrity", "FAIL")
+        
+        gate_passed = (
+            grounding_score >= 95.0 and
+            identity_score >= 90.0 and
+            q_integrity == "PASS" and
+            k_integrity == "PASS" and
+            report_integrity == "PASS"
+        )
+        
+        total_duration = time.time() - start_run_time
+        
+        if not gate_passed:
+            reasons = []
+            if grounding_score < 95.0:
+                reasons.append(f"Grounding score {grounding_score:.1f}% < 95%")
+            if identity_score < 90.0:
+                reasons.append(f"Identity score {identity_score:.1f}% < 90%")
+            if q_integrity != "PASS":
+                reasons.append(f"Question Integrity is {q_integrity} ({'; '.join(intel_res.get('errors', []))})")
+            if k_integrity != "PASS":
+                reasons.append(f"Keyword Integrity is {k_integrity} ({'; '.join(intel_res.get('errors', []))})")
+            if report_integrity != "PASS":
+                reasons.append("Report Integrity is FAIL")
+                
+            error_msg = f"Production Gate Validation Failed: {', '.join(reasons)}"
+            logger.error(f"[Pipeline] {error_msg}")
+            
+            supabase_client.table("analysis_runs").update({
+                "status": "FAILED_VALIDATION",
+                "error_message": error_msg,
+                "completed_at": "now()",
+                "processing_time": total_duration,
+                "current_agent": None
+            }).eq("id", run_id).execute()
+            
+            supabase_client.table("projects").update({
+                "status": "FAILED_VALIDATION",
+                "current_agent": None
+            }).eq("id", project_id).execute()
+            
+            try:
+                invalidate_project_cache(project_id)
+            except Exception:
+                pass
+            return
 
         # J. Update Project category/industry and status
         industry = bi_report.get("industry", "Other")
@@ -823,7 +1245,6 @@ async def run_analysis_pipeline(project_id: str, run_id: str, website_url: str):
         }).eq("id", project_id).execute()
         
         # 5. Mark Run completed
-        total_duration = time.time() - start_run_time
         supabase_client.table("analysis_runs").update({
             "status": "completed",
             "completed_at": "now()",

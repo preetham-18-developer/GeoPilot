@@ -38,6 +38,10 @@ You must also output a "feature_matrix" comparing the client with these competit
 Strict No-Hallucination Policy:
 - ONLY suggest real competitors matching the industry.
 - Return "NOT_FOUND" for any details that are unavailable. Do not guess.
+- You are forbidden from using outside knowledge.
+- Use only supplied page content.
+- If information is unavailable, return UNKNOWN.
+- Do not infer founders, years, locations, industries, products, or services.
 
 Format your response as a valid JSON object with keys "competitors" (array of 10 objects) and "feature_matrix" (object). Do not wrap it in markdown code blocks. Format:
 {{

@@ -47,8 +47,8 @@ MAX_PAGES = 20
 MAX_DEPTH = 3
 CONCURRENT_LIMIT = 3
 
-# JavaScript render wait time (ms) — ensures SPA content loads
-JS_WAIT_MS = 2500
+# JavaScript render wait time (ms) — ensures SPA content loads (React/Next.js hydration)
+JS_WAIT_MS = 5000
 
 
 class WebsiteSpider:
@@ -143,14 +143,34 @@ class WebsiteSpider:
     async def _render_with_context(self, url: str, context: Any) -> str:
         """
         Renders a URL using a shared Playwright browser context.
+        Uses 'networkidle' wait strategy + scroll trigger for React/Next.js SPAs.
         Ensures page is properly closed in a finally block to prevent memory leaks.
         """
         page = None
         try:
             page = await context.new_page()
-            await page.goto(url, wait_until="domcontentloaded", timeout=20000)
-            # Wait for JS framework to render content (React/Vue/Angular hydration)
+            try:
+                # First try networkidle — waits for JS framework to fully hydrate
+                await page.goto(url, wait_until="networkidle", timeout=30000)
+            except Exception:
+                # Fallback: domcontentloaded is faster but misses SPA content
+                try:
+                    await page.goto(url, wait_until="domcontentloaded", timeout=20000)
+                except Exception as e:
+                    logger.error(f"Playwright goto failed for {url}: {e}")
+                    return ""
+
+            # Wait for JS framework hydration (React/Next.js/Vue)
             await page.wait_for_timeout(JS_WAIT_MS)
+
+            # Scroll to bottom to trigger lazy-loaded content
+            try:
+                await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                await page.wait_for_timeout(1500)
+                await page.evaluate("window.scrollTo(0, 0)")
+            except Exception:
+                pass
+
             html = await page.content()
             return html
         except Exception as e:

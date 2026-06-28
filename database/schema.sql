@@ -861,4 +861,604 @@ CREATE POLICY "Agents can delete content opportunities v2" ON public.content_opp
     SELECT 1 FROM public.projects WHERE projects.id = content_opportunities_v2.project_id
   ));
 
+-- =========================================================================
+-- PHASE 7: CONTENT INTELLIGENCE & GEO CONTENT ENGINE TABLES
+-- =========================================================================
+
+-- 1. Topic Clusters Table
+CREATE TABLE IF NOT EXISTS public.topic_clusters (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id uuid REFERENCES public.projects(id) ON DELETE CASCADE not null,
+  run_id uuid REFERENCES public.analysis_runs(id) ON DELETE CASCADE not null,
+  parent_topic text NOT NULL,
+  subtopics text[] DEFAULT '{}',
+  supporting_questions text[] DEFAULT '{}',
+  supporting_keywords text[] DEFAULT '{}',
+  entity_relationships text[] DEFAULT '{}',
+  intent_types text[] DEFAULT '{}',
+  priority_score float DEFAULT 0.0,
+  created_at timestamptz DEFAULT now() not null
+);
+CREATE INDEX IF NOT EXISTS idx_topic_clusters_project_id ON public.topic_clusters(project_id);
+
+-- 2. Content Blueprints Table
+CREATE TABLE IF NOT EXISTS public.content_blueprints (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id uuid REFERENCES public.projects(id) ON DELETE CASCADE not null,
+  run_id uuid REFERENCES public.analysis_runs(id) ON DELETE CASCADE not null,
+  page_type text NOT NULL, -- 'Blog', 'Guide', 'FAQ', 'Case Study', 'Comparison', 'Checklist', 'Resource Page', 'Tutorial'
+  title text NOT NULL,
+  slug text NOT NULL,
+  target_intent text NOT NULL,
+  questions text[] DEFAULT '{}',
+  keywords text[] DEFAULT '{}',
+  entities text[] DEFAULT '{}',
+  suggested_internal_links text[] DEFAULT '{}',
+  schema_type text NOT NULL,
+  priority text NOT NULL, -- 'HIGH', 'MEDIUM', 'LOW'
+  impact_score integer NOT NULL,
+  effort_score integer NOT NULL,
+  expected_benefit text NOT NULL,
+  created_at timestamptz DEFAULT now() not null
+);
+CREATE INDEX IF NOT EXISTS idx_content_blueprints_project_id ON public.content_blueprints(project_id);
+
+-- 3. Authority Sources Table
+CREATE TABLE IF NOT EXISTS public.authority_sources (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id uuid REFERENCES public.projects(id) ON DELETE CASCADE not null,
+  run_id uuid REFERENCES public.analysis_runs(id) ON DELETE CASCADE not null,
+  topic text NOT NULL,
+  source_type text NOT NULL, -- 'Research Paper', 'Government Source', 'Industry Association', 'White Paper', 'Regulation', 'Standard', 'Certification'
+  title text NOT NULL,
+  organization text NOT NULL,
+  relevance_score float NOT NULL,
+  authority_score float NOT NULL,
+  citation_purpose text NOT NULL,
+  created_at timestamptz DEFAULT now() not null
+);
+CREATE INDEX IF NOT EXISTS idx_authority_sources_project_id ON public.authority_sources(project_id);
+
+-- 4. FAQ Clusters Table
+CREATE TABLE IF NOT EXISTS public.faq_clusters (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id uuid REFERENCES public.projects(id) ON DELETE CASCADE not null,
+  run_id uuid REFERENCES public.analysis_runs(id) ON DELETE CASCADE not null,
+  question text NOT NULL,
+  answer_outline text NOT NULL,
+  intent text NOT NULL,
+  priority text NOT NULL,
+  schema_markup jsonb NOT NULL,
+  created_at timestamptz DEFAULT now() not null
+);
+CREATE INDEX IF NOT EXISTS idx_faq_clusters_project_id ON public.faq_clusters(project_id);
+
+-- 5. Content Gap Reports Table
+CREATE TABLE IF NOT EXISTS public.content_gap_reports_v2 (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id uuid REFERENCES public.projects(id) ON DELETE CASCADE not null,
+  run_id uuid REFERENCES public.analysis_runs(id) ON DELETE CASCADE not null,
+  missing_topics text[] DEFAULT '{}',
+  missing_faq_areas text[] DEFAULT '{}',
+  missing_authority_signals text[] DEFAULT '{}',
+  missing_trust_pages text[] DEFAULT '{}',
+  missing_case_studies text[] DEFAULT '{}',
+  missing_comparison_pages text[] DEFAULT '{}',
+  missing_resource_pages text[] DEFAULT '{}',
+  impact_score integer DEFAULT 0,
+  effort_score integer DEFAULT 0,
+  recommendation_value float DEFAULT 0.0,
+  created_at timestamptz DEFAULT now() not null
+);
+CREATE INDEX IF NOT EXISTS idx_content_gap_reports_v2_project_id ON public.content_gap_reports_v2(project_id);
+
+-- 6. Internal Link Maps Table
+CREATE TABLE IF NOT EXISTS public.internal_link_maps (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id uuid REFERENCES public.projects(id) ON DELETE CASCADE not null,
+  run_id uuid REFERENCES public.analysis_runs(id) ON DELETE CASCADE not null,
+  parent_page text NOT NULL,
+  child_page text NOT NULL,
+  related_pages text[] DEFAULT '{}',
+  anchor_text text NOT NULL,
+  link_strength integer NOT NULL,
+  entity_relevance integer NOT NULL,
+  created_at timestamptz DEFAULT now() not null
+);
+CREATE INDEX IF NOT EXISTS idx_internal_link_maps_project_id ON public.internal_link_maps(project_id);
+
+-- 7. Schema Recommendations Table
+CREATE TABLE IF NOT EXISTS public.schema_recommendations (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id uuid REFERENCES public.projects(id) ON DELETE CASCADE not null,
+  run_id uuid REFERENCES public.analysis_runs(id) ON DELETE CASCADE not null,
+  page_url text NOT NULL,
+  page_title text NOT NULL,
+  recommended_schema text NOT NULL, -- 'FAQ', 'Article', 'Course', 'Organization', 'Person', 'Review', 'Product', 'LocalBusiness', 'SoftwareApplication', 'HowTo'
+  injected_status boolean DEFAULT false not null,
+  schema_json jsonb NOT NULL,
+  created_at timestamptz DEFAULT now() not null
+);
+CREATE INDEX IF NOT EXISTS idx_schema_recs_project_id ON public.schema_recommendations(project_id);
+
+-- 8. Citation Predictions Table
+CREATE TABLE IF NOT EXISTS public.citation_predictions (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id uuid REFERENCES public.projects(id) ON DELETE CASCADE not null,
+  run_id uuid REFERENCES public.analysis_runs(id) ON DELETE CASCADE not null,
+  page_url text NOT NULL,
+  page_title text NOT NULL,
+  citation_probability float NOT NULL,
+  authority_score float NOT NULL,
+  trust_score float NOT NULL,
+  entity_strength float NOT NULL,
+  content_depth float NOT NULL,
+  evidence_score float NOT NULL,
+  created_at timestamptz DEFAULT now() not null
+);
+CREATE INDEX IF NOT EXISTS idx_citation_preds_project_id ON public.citation_predictions(project_id);
+
+-- Enable RLS
+ALTER TABLE public.topic_clusters ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.content_blueprints ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.authority_sources ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.faq_clusters ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.content_gap_reports_v2 ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.internal_link_maps ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.schema_recommendations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.citation_predictions ENABLE ROW LEVEL SECURITY;
+
+-- Policies
+CREATE POLICY "Users can view their own topic clusters" ON public.topic_clusters
+  FOR SELECT USING (EXISTS (
+    SELECT 1 FROM public.projects WHERE projects.id = topic_clusters.project_id AND projects.user_id = current_user_id()
+  ));
+CREATE POLICY "Agents can insert topic clusters" ON public.topic_clusters
+  FOR INSERT WITH CHECK (EXISTS (
+    SELECT 1 FROM public.projects WHERE projects.id = topic_clusters.project_id
+  ));
+
+CREATE POLICY "Users can view their own blueprints" ON public.content_blueprints
+  FOR SELECT USING (EXISTS (
+    SELECT 1 FROM public.projects WHERE projects.id = content_blueprints.project_id AND projects.user_id = current_user_id()
+  ));
+CREATE POLICY "Agents can insert blueprints" ON public.content_blueprints
+  FOR INSERT WITH CHECK (EXISTS (
+    SELECT 1 FROM public.projects WHERE projects.id = content_blueprints.project_id
+  ));
+
+CREATE POLICY "Users can view their own authority sources" ON public.authority_sources
+  FOR SELECT USING (EXISTS (
+    SELECT 1 FROM public.projects WHERE projects.id = authority_sources.project_id AND projects.user_id = current_user_id()
+  ));
+CREATE POLICY "Agents can insert authority sources" ON public.authority_sources
+  FOR INSERT WITH CHECK (EXISTS (
+    SELECT 1 FROM public.projects WHERE projects.id = authority_sources.project_id
+  ));
+
+CREATE POLICY "Users can view their own FAQ clusters" ON public.faq_clusters
+  FOR SELECT USING (EXISTS (
+    SELECT 1 FROM public.projects WHERE projects.id = faq_clusters.project_id AND projects.user_id = current_user_id()
+  ));
+CREATE POLICY "Agents can insert FAQ clusters" ON public.faq_clusters
+  FOR INSERT WITH CHECK (EXISTS (
+    SELECT 1 FROM public.projects WHERE projects.id = faq_clusters.project_id
+  ));
+
+CREATE POLICY "Users can view their own content gaps" ON public.content_gap_reports_v2
+  FOR SELECT USING (EXISTS (
+    SELECT 1 FROM public.projects WHERE projects.id = content_gap_reports_v2.project_id AND projects.user_id = current_user_id()
+  ));
+CREATE POLICY "Agents can insert content gaps" ON public.content_gap_reports_v2
+  FOR INSERT WITH CHECK (EXISTS (
+    SELECT 1 FROM public.projects WHERE projects.id = content_gap_reports_v2.project_id
+  ));
+
+CREATE POLICY "Users can view their own internal links" ON public.internal_link_maps
+  FOR SELECT USING (EXISTS (
+    SELECT 1 FROM public.projects WHERE projects.id = internal_link_maps.project_id AND projects.user_id = current_user_id()
+  ));
+CREATE POLICY "Agents can insert internal links" ON public.internal_link_maps
+  FOR INSERT WITH CHECK (EXISTS (
+    SELECT 1 FROM public.projects WHERE projects.id = internal_link_maps.project_id
+  ));
+
+CREATE POLICY "Users can view their own schema recommendations" ON public.schema_recommendations
+  FOR SELECT USING (EXISTS (
+    SELECT 1 FROM public.projects WHERE projects.id = schema_recommendations.project_id AND projects.user_id = current_user_id()
+  ));
+CREATE POLICY "Agents can insert schema recommendations" ON public.schema_recommendations
+  FOR INSERT WITH CHECK (EXISTS (
+    SELECT 1 FROM public.projects WHERE projects.id = schema_recommendations.project_id
+  ));
+
+CREATE POLICY "Users can view their own citation predictions" ON public.citation_predictions
+  FOR SELECT USING (EXISTS (
+    SELECT 1 FROM public.projects WHERE projects.id = citation_predictions.project_id AND projects.user_id = current_user_id()
+  ));
+CREATE POLICY "Agents can insert citation predictions" ON public.citation_predictions
+  FOR INSERT WITH CHECK (EXISTS (
+    SELECT 1 FROM public.projects WHERE projects.id = citation_predictions.project_id
+  ));
+
+
+-- =========================================================================
+-- PHASE 8: SELF-HEALING & RELIABILITY INTELLIGENCE LAYER TABLES
+-- =========================================================================
+
+-- 1. Progress checkpoints
+CREATE TABLE IF NOT EXISTS public.execution_checkpoints (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  run_id uuid REFERENCES public.analysis_runs(id) ON DELETE CASCADE not null,
+  project_id uuid REFERENCES public.projects(id) ON DELETE CASCADE not null,
+  node_name text NOT NULL,
+  status text NOT NULL, -- 'running', 'completed', 'failed'
+  started_at timestamptz DEFAULT now() not null,
+  completed_at timestamptz,
+  retry_count integer DEFAULT 0 not null,
+  payload_hash text,
+  resume_data jsonb DEFAULT '{}'::jsonb,
+  created_at timestamptz DEFAULT now() not null
+);
+CREATE INDEX IF NOT EXISTS idx_execution_checkpoints_run_id ON public.execution_checkpoints(run_id);
+CREATE INDEX IF NOT EXISTS idx_execution_checkpoints_project_id ON public.execution_checkpoints(project_id);
+CREATE INDEX IF NOT EXISTS idx_execution_checkpoints_node_name ON public.execution_checkpoints(node_name);
+
+-- 2. Agent Health Logs
+CREATE TABLE IF NOT EXISTS public.agent_health_logs (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  run_id uuid REFERENCES public.analysis_runs(id) ON DELETE CASCADE not null,
+  project_id uuid REFERENCES public.projects(id) ON DELETE CASCADE not null,
+  agent_name text NOT NULL,
+  duration_ms integer DEFAULT 0 not null,
+  memory_mb float DEFAULT 0.0 not null,
+  llm_calls integer DEFAULT 0 not null,
+  cache_hits integer DEFAULT 0 not null,
+  cache_misses integer DEFAULT 0 not null,
+  retries integer DEFAULT 0 not null,
+  success boolean DEFAULT false not null,
+  warning_count integer DEFAULT 0 not null,
+  created_at timestamptz DEFAULT now() not null
+);
+CREATE INDEX IF NOT EXISTS idx_agent_health_logs_project_id ON public.agent_health_logs(project_id);
+
+-- 3. Dependency Health Logs
+CREATE TABLE IF NOT EXISTS public.dependency_health_logs (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  service_name text NOT NULL,
+  latency_ms float NOT NULL,
+  status text NOT NULL,
+  uptime_percentage float DEFAULT 100.0 not null,
+  error_count integer DEFAULT 0 not null,
+  timestamp timestamptz DEFAULT now() not null
+);
+CREATE INDEX IF NOT EXISTS idx_dep_health_logs_service ON public.dependency_health_logs(service_name);
+CREATE INDEX IF NOT EXISTS idx_dep_health_logs_time ON public.dependency_health_logs(timestamp);
+
+-- 4. Error Diagnostics Table
+CREATE TABLE IF NOT EXISTS public.error_diagnostics (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  run_id uuid REFERENCES public.analysis_runs(id) ON DELETE CASCADE not null,
+  project_id uuid REFERENCES public.projects(id) ON DELETE CASCADE not null,
+  agent_name text NOT NULL,
+  error_type text NOT NULL,
+  severity text NOT NULL,
+  root_cause text NOT NULL,
+  traceback text NOT NULL,
+  recovery_action text NOT NULL,
+  retryable boolean DEFAULT false not null,
+  timestamp timestamptz DEFAULT now() not null
+);
+CREATE INDEX IF NOT EXISTS idx_error_diagnostics_project_id ON public.error_diagnostics(project_id);
+
+-- 5. Reliability Reports
+CREATE TABLE IF NOT EXISTS public.reliability_reports (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id uuid REFERENCES public.projects(id) ON DELETE CASCADE not null,
+  run_id uuid REFERENCES public.analysis_runs(id) ON DELETE CASCADE not null,
+  reliability_score float NOT NULL,
+  success_rate float NOT NULL,
+  retry_success_rate float NOT NULL,
+  dependency_score float NOT NULL,
+  runtime_stability float NOT NULL,
+  pipeline_completion_score float NOT NULL,
+  recovery_success_rate float NOT NULL,
+  created_at timestamptz DEFAULT now() not null
+);
+CREATE INDEX IF NOT EXISTS idx_reliability_reports_project_id ON public.reliability_reports(project_id);
+
+-- 6. Execution Timelines
+CREATE TABLE IF NOT EXISTS public.execution_timelines (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  run_id uuid REFERENCES public.analysis_runs(id) ON DELETE CASCADE not null,
+  node_name text NOT NULL,
+  started_at timestamptz DEFAULT now() not null,
+  completed_at timestamptz,
+  duration_ms integer NOT NULL,
+  created_at timestamptz DEFAULT now() not null
+);
+CREATE INDEX IF NOT EXISTS idx_execution_timelines_run_id ON public.execution_timelines(run_id);
+
+-- 7. Recovery History
+CREATE TABLE IF NOT EXISTS public.recovery_history (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  run_id uuid REFERENCES public.analysis_runs(id) ON DELETE CASCADE not null,
+  failed_node text NOT NULL,
+  resumed_node text NOT NULL,
+  success boolean DEFAULT false not null,
+  retry_count integer DEFAULT 0 not null,
+  timestamp timestamptz DEFAULT now() not null
+);
+CREATE INDEX IF NOT EXISTS idx_recovery_history_run_id ON public.recovery_history(run_id);
+
+-- Enable RLS
+ALTER TABLE public.execution_checkpoints ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.agent_health_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.dependency_health_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.error_diagnostics ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.reliability_reports ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.execution_timelines ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.recovery_history ENABLE ROW LEVEL SECURITY;
+
+-- Policies
+CREATE POLICY "Users view checkpoints" ON public.execution_checkpoints FOR SELECT USING (exists (select 1 from public.projects where projects.id = execution_checkpoints.project_id and projects.user_id = current_user_id()));
+CREATE POLICY "Agents write checkpoints" ON public.execution_checkpoints FOR ALL USING (exists (select 1 from public.projects where projects.id = execution_checkpoints.project_id));
+
+CREATE POLICY "Users view agent health logs" ON public.agent_health_logs FOR SELECT USING (exists (select 1 from public.projects where projects.id = agent_health_logs.project_id and projects.user_id = current_user_id()));
+CREATE POLICY "Agents write agent health logs" ON public.agent_health_logs FOR ALL USING (exists (select 1 from public.projects where projects.id = agent_health_logs.project_id));
+
+CREATE POLICY "Users view dependency logs" ON public.dependency_health_logs FOR SELECT USING (true);
+CREATE POLICY "Agents write dependency logs" ON public.dependency_health_logs FOR ALL USING (true);
+
+CREATE POLICY "Users view diagnostics" ON public.error_diagnostics FOR SELECT USING (exists (select 1 from public.projects where projects.id = error_diagnostics.project_id and projects.user_id = current_user_id()));
+CREATE POLICY "Agents write diagnostics" ON public.error_diagnostics FOR ALL USING (exists (select 1 from public.projects where projects.id = error_diagnostics.project_id));
+
+CREATE POLICY "Users view reliability reports" ON public.reliability_reports FOR SELECT USING (exists (select 1 from public.projects where projects.id = reliability_reports.project_id and projects.user_id = current_user_id()));
+CREATE POLICY "Agents write reliability reports" ON public.reliability_reports FOR ALL USING (exists (select 1 from public.projects where projects.id = reliability_reports.project_id));
+
+CREATE POLICY "Users view timelines" ON public.execution_timelines FOR SELECT USING (exists (select 1 from public.analysis_runs join public.projects on projects.id = analysis_runs.project_id where analysis_runs.id = execution_timelines.run_id and projects.user_id = current_user_id()));
+CREATE POLICY "Agents write timelines" ON public.execution_timelines FOR ALL USING (true);
+
+CREATE POLICY "Users view recovery history" ON public.recovery_history FOR SELECT USING (exists (select 1 from public.analysis_runs join public.projects on projects.id = analysis_runs.project_id where analysis_runs.id = recovery_history.run_id and projects.user_id = current_user_id()));
+CREATE POLICY "Agents write recovery history" ON public.recovery_history FOR ALL USING (true);
+
+-- 8. Retry Reports
+CREATE TABLE IF NOT EXISTS public.retry_reports (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id uuid REFERENCES public.projects(id) ON DELETE CASCADE not null,
+  run_id uuid REFERENCES public.analysis_runs(id) ON DELETE CASCADE not null,
+  agent_name text NOT NULL,
+  attempt_number integer NOT NULL,
+  error_message text,
+  error_type text,
+  succeeded boolean DEFAULT false not null,
+  created_at timestamptz DEFAULT now() not null
+);
+CREATE INDEX IF NOT EXISTS idx_retry_reports_project_id ON public.retry_reports(project_id);
+CREATE INDEX IF NOT EXISTS idx_retry_reports_run_id ON public.retry_reports(run_id);
+ALTER TABLE public.retry_reports ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users view retry reports" ON public.retry_reports FOR SELECT USING (exists (select 1 from public.projects where projects.id = retry_reports.project_id and projects.user_id = current_user_id()));
+CREATE POLICY "Agents write retry reports" ON public.retry_reports FOR ALL USING (exists (select 1 from public.projects where projects.id = retry_reports.project_id));
+
+-- 9. Fallback Reports
+CREATE TABLE IF NOT EXISTS public.fallback_reports (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id uuid REFERENCES public.projects(id) ON DELETE CASCADE not null,
+  run_id uuid REFERENCES public.analysis_runs(id) ON DELETE CASCADE not null,
+  agent_name text NOT NULL,
+  fallback_trigger text NOT NULL,
+  fallback_action text NOT NULL,
+  details jsonb DEFAULT '{}'::jsonb,
+  created_at timestamptz DEFAULT now() not null
+);
+CREATE INDEX IF NOT EXISTS idx_fallback_reports_project_id ON public.fallback_reports(project_id);
+CREATE INDEX IF NOT EXISTS idx_fallback_reports_run_id ON public.fallback_reports(run_id);
+ALTER TABLE public.fallback_reports ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users view fallback reports" ON public.fallback_reports FOR SELECT USING (exists (select 1 from public.projects where projects.id = fallback_reports.project_id and projects.user_id = current_user_id()));
+CREATE POLICY "Agents write fallback reports" ON public.fallback_reports FOR ALL USING (exists (select 1 from public.projects where projects.id = fallback_reports.project_id));
+
+-- =========================================================================
+-- PHASE 9: GEO CITATION & RECOMMENDATION INTELLIGENCE LAYER TABLES
+-- =========================================================================
+
+-- 1. Citation Reports
+CREATE TABLE IF NOT EXISTS public.citation_reports (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id uuid REFERENCES public.projects(id) ON DELETE CASCADE not null,
+  page_url text NOT NULL,
+  citation_probability float NOT NULL,
+  authority_score float NOT NULL,
+  trust_score float NOT NULL,
+  evidence_density float NOT NULL,
+  confidence float NOT NULL,
+  created_at timestamptz DEFAULT now() not null
+);
+CREATE INDEX IF NOT EXISTS idx_citation_reports_project_id ON public.citation_reports(project_id);
+ALTER TABLE public.citation_reports ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users view citation reports" ON public.citation_reports FOR SELECT USING (exists (select 1 from public.projects where projects.id = citation_reports.project_id and projects.user_id = current_user_id()));
+CREATE POLICY "Agents write citation reports" ON public.citation_reports FOR ALL USING (exists (select 1 from public.projects where projects.id = citation_reports.project_id));
+
+-- 2. Recommendation Gaps
+CREATE TABLE IF NOT EXISTS public.recommendation_gaps (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id uuid REFERENCES public.projects(id) ON DELETE CASCADE not null,
+  category text NOT NULL,
+  severity text NOT NULL,
+  missing_signal text NOT NULL,
+  explanation text NOT NULL,
+  repair_action text NOT NULL,
+  created_at timestamptz DEFAULT now() not null
+);
+CREATE INDEX IF NOT EXISTS idx_recommendation_gaps_project_id ON public.recommendation_gaps(project_id);
+ALTER TABLE public.recommendation_gaps ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users view recommendation gaps" ON public.recommendation_gaps FOR SELECT USING (exists (select 1 from public.projects where projects.id = recommendation_gaps.project_id and projects.user_id = current_user_id()));
+CREATE POLICY "Agents write recommendation gaps" ON public.recommendation_gaps FOR ALL USING (exists (select 1 from public.projects where projects.id = recommendation_gaps.project_id));
+
+-- 3. Discovered Authority Entities
+CREATE TABLE IF NOT EXISTS public.authority_entities (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id uuid REFERENCES public.projects(id) ON DELETE CASCADE not null,
+  entity_name text NOT NULL,
+  entity_type text NOT NULL,
+  authority_strength float NOT NULL,
+  created_at timestamptz DEFAULT now() not null
+);
+CREATE INDEX IF NOT EXISTS idx_authority_entities_project_id ON public.authority_entities(project_id);
+ALTER TABLE public.authority_entities ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users view authority entities" ON public.authority_entities FOR SELECT USING (exists (select 1 from public.projects where projects.id = authority_entities.project_id and projects.user_id = current_user_id()));
+CREATE POLICY "Agents write authority entities" ON public.authority_entities FOR ALL USING (exists (select 1 from public.projects where projects.id = authority_entities.project_id));
+
+-- 4. Recommendation Competitor Analysis
+CREATE TABLE IF NOT EXISTS public.recommendation_competitor_analysis (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id uuid REFERENCES public.projects(id) ON DELETE CASCADE not null,
+  competitor text NOT NULL,
+  advantage text NOT NULL,
+  weakness text NOT NULL,
+  missing_content text NOT NULL,
+  trust_difference float NOT NULL,
+  authority_difference float NOT NULL,
+  recommendation_gap text NOT NULL,
+  created_at timestamptz DEFAULT now() not null
+);
+CREATE INDEX IF NOT EXISTS idx_rec_competitor_analysis_project_id ON public.recommendation_competitor_analysis(project_id);
+ALTER TABLE public.recommendation_competitor_analysis ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users view competitor recommendations" ON public.recommendation_competitor_analysis FOR SELECT USING (exists (select 1 from public.projects where projects.id = recommendation_competitor_analysis.project_id and projects.user_id = current_user_id()));
+CREATE POLICY "Agents write competitor recommendations" ON public.recommendation_competitor_analysis FOR ALL USING (exists (select 1 from public.projects where projects.id = recommendation_competitor_analysis.project_id));
+
+-- =========================================================================
+-- PHASE 10: AUTONOMOUS OPTIMIZATION & STRATEGY INTELLIGENCE LAYER TABLES
+-- =========================================================================
+
+-- 1. Optimization Plans (Prioritized fixes)
+CREATE TABLE IF NOT EXISTS public.optimization_plans (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id uuid REFERENCES public.projects(id) ON DELETE CASCADE not null,
+  category text NOT NULL,
+  recommendation text NOT NULL,
+  impact_score float NOT NULL,
+  effort_score float NOT NULL,
+  priority_score float NOT NULL,
+  estimated_geo_gain float NOT NULL,
+  status text DEFAULT 'pending' NOT NULL,
+  created_at timestamptz DEFAULT now() not null
+);
+CREATE INDEX IF NOT EXISTS idx_optimization_plans_project_id ON public.optimization_plans(project_id);
+ALTER TABLE public.optimization_plans ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users view optimization plans" ON public.optimization_plans FOR SELECT USING (exists (select 1 from public.projects where projects.id = optimization_plans.project_id and projects.user_id = current_user_id()));
+CREATE POLICY "Agents write optimization plans" ON public.optimization_plans FOR ALL USING (exists (select 1 from public.projects where projects.id = optimization_plans.project_id));
+
+-- 2. Strategy Simulations (Before vs After GEO scores)
+CREATE TABLE IF NOT EXISTS public.strategy_simulations (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id uuid REFERENCES public.projects(id) ON DELETE CASCADE not null,
+  current_geo_score float NOT NULL,
+  projected_geo_score float NOT NULL,
+  expected_gain float NOT NULL,
+  confidence float NOT NULL,
+  created_at timestamptz DEFAULT now() not null
+);
+CREATE INDEX IF NOT EXISTS idx_strategy_simulations_project_id ON public.strategy_simulations(project_id);
+ALTER TABLE public.strategy_simulations ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users view strategy simulations" ON public.strategy_simulations FOR SELECT USING (exists (select 1 from public.projects where projects.id = strategy_simulations.project_id and projects.user_id = current_user_id()));
+CREATE POLICY "Agents write strategy simulations" ON public.strategy_simulations FOR ALL USING (exists (select 1 from public.projects where projects.id = strategy_simulations.project_id));
+
+-- 3. ROI Reports
+CREATE TABLE IF NOT EXISTS public.roi_reports (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id uuid REFERENCES public.projects(id) ON DELETE CASCADE not null,
+  category text NOT NULL,
+  effort float NOT NULL,
+  impact float NOT NULL,
+  roi_score float NOT NULL,
+  explanation text NOT NULL,
+  created_at timestamptz DEFAULT now() not null
+);
+CREATE INDEX IF NOT EXISTS idx_roi_reports_project_id ON public.roi_reports(project_id);
+ALTER TABLE public.roi_reports ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users view roi reports" ON public.roi_reports FOR SELECT USING (exists (select 1 from public.projects where projects.id = roi_reports.project_id and projects.user_id = current_user_id()));
+CREATE POLICY "Agents write roi reports" ON public.roi_reports FOR ALL USING (exists (select 1 from public.projects where projects.id = roi_reports.project_id));
+
+-- 4. Optimization History (Tracks applied changes)
+CREATE TABLE IF NOT EXISTS public.optimization_history (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id uuid REFERENCES public.projects(id) ON DELETE CASCADE not null,
+  recommendation text NOT NULL,
+  status text NOT NULL,
+  executed_at timestamptz DEFAULT now() not null
+);
+CREATE INDEX IF NOT EXISTS idx_optimization_history_project_id ON public.optimization_history(project_id);
+ALTER TABLE public.optimization_history ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users view optimization history" ON public.optimization_history FOR SELECT USING (exists (select 1 from public.projects where projects.id = optimization_history.project_id and projects.user_id = current_user_id()));
+CREATE POLICY "Agents write optimization history" ON public.optimization_history FOR ALL USING (exists (select 1 from public.projects where projects.id = optimization_history.project_id));
+
+-- =========================================================================
+-- PHASE 11: AUTONOMOUS GEO EXECUTION LAYER TABLES
+-- =========================================================================
+
+-- 1. Execution Tasks (Actionable roadmap tasks)
+CREATE TABLE IF NOT EXISTS public.execution_tasks (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id uuid REFERENCES public.projects(id) ON DELETE CASCADE not null,
+  category text NOT NULL,
+  title text NOT NULL,
+  description text NOT NULL,
+  priority text NOT NULL,
+  effort_score float NOT NULL,
+  impact_score float NOT NULL,
+  status text DEFAULT 'pending' NOT NULL,
+  created_at timestamptz DEFAULT now() not null
+);
+CREATE INDEX IF NOT EXISTS idx_execution_tasks_project_id ON public.execution_tasks(project_id);
+ALTER TABLE public.execution_tasks ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users view execution tasks" ON public.execution_tasks FOR SELECT USING (exists (select 1 from public.projects where projects.id = execution_tasks.project_id and projects.user_id = current_user_id()));
+CREATE POLICY "Agents write execution tasks" ON public.execution_tasks FOR ALL USING (exists (select 1 from public.projects where projects.id = execution_tasks.project_id));
+
+-- 2. Generated Assets (Created outputs)
+CREATE TABLE IF NOT EXISTS public.generated_assets (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id uuid REFERENCES public.projects(id) ON DELETE CASCADE not null,
+  asset_type text NOT NULL,
+  title text NOT NULL,
+  content jsonb NOT NULL,
+  created_at timestamptz DEFAULT now() not null
+);
+CREATE INDEX IF NOT EXISTS idx_generated_assets_project_id ON public.generated_assets(project_id);
+CREATE INDEX IF NOT EXISTS idx_generated_assets_type ON public.generated_assets(asset_type);
+ALTER TABLE public.generated_assets ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users view generated assets" ON public.generated_assets FOR SELECT USING (exists (select 1 from public.projects where projects.id = generated_assets.project_id and projects.user_id = current_user_id()));
+CREATE POLICY "Agents write generated assets" ON public.generated_assets FOR ALL USING (exists (select 1 from public.projects where projects.id = generated_assets.project_id));
+
+-- 3. Execution Results (Optimization outcomes)
+CREATE TABLE IF NOT EXISTS public.execution_results (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id uuid REFERENCES public.projects(id) ON DELETE CASCADE not null,
+  task_id uuid REFERENCES public.execution_tasks(id) ON DELETE CASCADE not null,
+  before_score float NOT NULL,
+  after_score float NOT NULL,
+  gain float NOT NULL,
+  confidence float NOT NULL,
+  created_at timestamptz DEFAULT now() not null
+);
+CREATE INDEX IF NOT EXISTS idx_execution_results_project_id ON public.execution_results(project_id);
+ALTER TABLE public.execution_results ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users view execution results" ON public.execution_results FOR SELECT USING (exists (select 1 from public.projects where projects.id = execution_results.project_id and projects.user_id = current_user_id()));
+CREATE POLICY "Agents write execution results" ON public.execution_results FOR ALL USING (exists (select 1 from public.projects where projects.id = execution_results.project_id));
+
+-- 4. Learning Memory (Success patterns log)
+CREATE TABLE IF NOT EXISTS public.learning_memory (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id uuid REFERENCES public.projects(id) ON DELETE CASCADE not null,
+  category text NOT NULL,
+  optimization text NOT NULL,
+  average_gain float NOT NULL,
+  success_rate float NOT NULL,
+  created_at timestamptz DEFAULT now() not null
+);
+CREATE INDEX IF NOT EXISTS idx_learning_memory_project_id ON public.learning_memory(project_id);
+ALTER TABLE public.learning_memory ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users view learning memory" ON public.learning_memory FOR SELECT USING (exists (select 1 from public.projects where projects.id = learning_memory.project_id and projects.user_id = current_user_id()));
+CREATE POLICY "Agents write learning memory" ON public.learning_memory FOR ALL USING (exists (select 1 from public.projects where projects.id = learning_memory.project_id));
+
+
 

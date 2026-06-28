@@ -1,0 +1,414 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id               String         @id @db.Uuid
+  email            String         @unique
+  fullName         String?        @map("full_name")
+  companyName      String?        @map("company_name")
+  role             String?
+  subscriptionPlan String?        @map("subscription_plan")
+  createdAt        DateTime       @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt        DateTime       @default(now()) @map("updated_at") @db.Timestamptz
+  projects         Project[]
+  activityLogs     ActivityLog[]
+  notifications    Notification[]
+  subscriptions    Subscription[]
+
+  @@map("users")
+}
+
+model Project {
+  id               String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId           String                 @map("user_id") @db.Uuid
+  projectName      String                 @map("project_name")
+  websiteUrl       String                 @map("website_url")
+  industry         String?
+  status           String                 @default("pending")
+  createdAt        DateTime               @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt        DateTime               @default(now()) @map("updated_at") @db.Timestamptz
+  currentAgent     String?                @map("current_agent")
+  knowledgeBase    String?                @map("knowledge_base")
+  domain           String?
+  errorMessage     String?                @map("error_message")
+  user             User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  webPages         CrawledPage[]
+  contentChunks    ContentChunk[]
+  businessProfiles BusinessProfile[]
+  questions        Question[]
+  keywords         Keyword[]
+  competitors      Competitor[]
+  opportunities    ContentOpportunity[]
+  reports          Report[]
+  agentRuns        AgentRun[]
+  activityLogs     ActivityLog[]
+  qaReports        QAReport[]
+  blogs            Blog[]
+  featureMatrix    CompetitorFeatureMatrix[]
+  gapAnalysis      GapAnalysis[]
+  failures         ExtractionFailure[]
+  simulations      RecommendationSimulation[]
+  entityNodes      EntityNode[]
+  entityRelations  EntityRelationship[]
+  coverage         ContentCoverage[]
+
+  @@map("projects")
+}
+
+model CrawledPage {
+  id              String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  projectId       String           @map("project_id") @db.Uuid
+  url             String
+  title           String?
+  metaDescription String?          @map("meta_description")
+  pageType        String?          @map("page_type")
+  content         String?
+  crawlDate       DateTime         @default(now()) @map("crawl_date") @db.Timestamptz
+  wordCount       Int?             @map("word_count")
+  language        String?
+  statusCode      Int?             @map("status_code")
+  hash            String?
+  createdAt       DateTime         @default(now()) @map("created_at") @db.Timestamptz
+  project         Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  extractedFacts  ExtractedFact[]
+
+  @@map("web_pages")
+}
+
+model ContentChunk {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  projectId String   @map("project_id") @db.Uuid
+  text      String
+  sourceUrl String   @map("source_url")
+  tokenCount Int     @map("token_count")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@map("content_chunks")
+}
+
+model ExtractedFact {
+  id              String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  projectId       String        @map("project_id") @db.Uuid
+  pageId          String?       @map("page_id") @db.Uuid
+  factCategory    String        @map("fact_category")
+  factKey         String        @map("fact_key")
+  factValue       String        @map("fact_value")
+  sourceUrl       String        @map("source_url")
+  evidenceText    String?       @map("evidence_text")
+  confidenceScore Float?        @map("confidence_score")
+  createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz
+  page            CrawledPage?  @relation(fields: [pageId], references: [id], onDelete: Cascade)
+  verifiedFacts   VerifiedFact[]
+
+  @@map("extracted_facts")
+}
+
+model VerifiedFact {
+  id                 String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  extractedFactId    String        @map("extracted_fact_id") @db.Uuid
+  verificationStatus String        @map("verification_status")
+  verificationScore  Float         @map("verification_score")
+  verifiedBy         String        @map("verified_by")
+  verifiedAt         DateTime      @default(now()) @map("verified_at") @db.Timestamptz
+  extractedFact      ExtractedFact @relation(fields: [extractedFactId], references: [id], onDelete: Cascade)
+
+  @@map("verified_facts")
+}
+
+model BusinessProfile {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  projectId      String   @map("project_id") @db.Uuid
+  companyName    String?  @map("company_name")
+  industry       String?
+  description    String?
+  mission        String?
+  vision         String?
+  usp            String?
+  targetAudience String?  @map("target_audience")
+  strengths      String[]
+  weaknesses     String[]
+  opportunities  String[]
+  risks          String[]
+  generatedAt    DateTime @default(now()) @map("generated_at") @db.Timestamptz
+  trustSignals   String[] @map("trust_signals")
+  businessModel  String?  @map("business_model")
+  aiVisibility   String[] @map("ai_visibility_opportunities")
+  project        Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@map("business_profiles")
+}
+
+model Question {
+  id                     String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  projectId              String   @map("project_id") @db.Uuid
+  question               String
+  questionType           String   @map("question_type")
+  intent                 String?
+  confidenceScore        Float?   @map("confidence_score")
+  recommendedAnswer      String?  @map("recommended_answer")
+  recommendationScore    Float?   @map("recommendation_score")
+  commercialScore        Float?   @map("commercial_score")
+  intentScore            Float?   @map("intent_score")
+  priorityScore          Float?   @map("priority_score")
+  difficultyEstimate     String?  @map("difficulty_estimate")
+  opportunityEstimate    String?  @map("opportunity_estimate")
+  priority               String?
+  createdAt              DateTime @default(now()) @map("created_at") @db.Timestamptz
+  coverageScore          Float?   @map("coverage_score")
+  businessAlignment      Float?   @map("business_alignment")
+  project                Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@map("questions")
+}
+
+model Keyword {
+  id                  String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  projectId           String   @map("project_id") @db.Uuid
+  keyword             String
+  keywordType         String   @map("keyword_type")
+  intent              String?
+  cluster             String?
+  confidenceScore     Float?   @map("confidence_score")
+  priority            String?
+  difficultyEstimate  String?  @map("difficulty_estimate")
+  opportunityEstimate String?  @map("opportunity_estimate")
+  source              String?
+  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz
+  coverageScore       Float?   @map("coverage_score")
+  entityRelevance     Float?   @map("entity_relevance")
+  recommendationValue Float?   @map("recommendation_value")
+  project             Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@map("keywords")
+}
+
+model Competitor {
+  id                   String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  projectId            String   @map("project_id") @db.Uuid
+  competitorName       String   @map("competitor_name")
+  website              String?
+  competitorType       String   @map("competitor_type")
+  strengths            String[]
+  weaknesses           String[]
+  confidenceScore      Float?   @map("confidence_score")
+  createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz
+  description          String?
+  uniqueFeatures       String[] @map("unique_features")
+  contentGaps          String[] @map("content_gaps")
+  reasonSelected       String[] @map("reason_selected")
+  similarityScore      Int?     @map("similarity_score")
+  industryMatch        String?  @map("industry_match")
+  audienceMatch        String?  @map("audience_match")
+  serviceMatch         String?  @map("service_match")
+  differentiationScore Int?     @map("differentiation_score")
+  project              Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@map("competitors")
+}
+
+model ContentOpportunity {
+  id                 String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  projectId          String   @map("project_id") @db.Uuid
+  title              String
+  contentType        String   @map("content_type")
+  priority           String
+  reason             String?
+  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz
+  impactScore        Int?     @map("impact_score")
+  effortScore        Int?     @map("effort_score")
+  supportingEvidence String?  @map("supporting_evidence")
+  relatedKeywords    String[] @map("related_keywords")
+  relatedQuestions   String[] @map("related_questions")
+  expectedBenefit    String?  @map("expected_benefit")
+  project            Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@map("content_opportunities")
+}
+
+model Report {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  projectId     String   @map("project_id") @db.Uuid
+  reportType    String   @map("report_type")
+  reportTitle   String   @map("report_title")
+  reportContent Json     @map("report_content")
+  generatedBy   String?  @map("generated_by")
+  generatedAt   DateTime @default(now()) @map("generated_at") @db.Timestamptz
+  project       Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@map("reports")
+}
+
+model AgentRun {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  projectId      String   @map("project_id") @db.Uuid
+  agentName      String   @map("agent_name")
+  status         String
+  inputTokens    Int?     @default(0) @map("input_tokens")
+  outputTokens   Int?     @default(0) @map("output_tokens")
+  processingTime Float?   @map("processing_time")
+  errorMessage   String?  @map("error_message")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
+  project        Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@map("agent_runs")
+}
+
+model ActivityLog {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  projectId String?  @map("project_id") @db.Uuid
+  action    String
+  metadata  Json?
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project   Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@map("activity_logs")
+}
+
+model Notification {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  title     String
+  message   String?
+  status    String   @default("unread")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("notifications")
+}
+
+model Subscription {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId      String    @map("user_id") @db.Uuid
+  plan        String
+  status      String
+  renewalDate DateTime? @map("renewal_date")
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("subscriptions")
+}
+
+model QAReport {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  projectId      String   @map("project_id") @db.Uuid
+  runId          String   @map("run_id") @db.Uuid
+  approvalStatus String   @map("approval_status")
+  qaScore        Float    @map("qa_score")
+  checks         Json
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
+  project        Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@map("qa_reports")
+}
+
+model Blog {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  projectId      String   @map("project_id") @db.Uuid
+  title          String
+  outline        String?
+  content        String?
+  targetKeywords String[] @map("target_keywords")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
+  project        Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@map("blogs")
+}
+
+model CompetitorFeatureMatrix {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  projectId String   @map("project_id") @db.Uuid
+  features  Json?
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@map("competitor_feature_matrix")
+}
+
+model GapAnalysis {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  projectId      String   @map("project_id") @db.Uuid
+  gapType        String?  @map("gap_type")
+  priority       String?
+  recommendation String?
+  status         String   @default("pending")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
+  project        Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@map("gap_analysis")
+}
+
+model ExtractionFailure {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  projectId    String   @map("project_id") @db.Uuid
+  pageUrl      String?  @map("page_url")
+  reason       String?
+  agentName    String?  @map("agent_name")
+  errorMessage String?  @map("error_message")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
+  project      Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@map("extraction_failures")
+}
+
+model RecommendationSimulation {
+  id                        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  projectId                 String   @map("project_id") @db.Uuid
+  query                     String
+  recommendationProbability Float?   @map("recommendation_probability")
+  supportingEvidence        String[] @map("supporting_evidence")
+  missingRequirements       String[] @map("missing_requirements")
+  improvementActions        String[] @map("improvement_actions")
+  createdAt                 DateTime @default(now()) @map("created_at") @db.Timestamptz
+  project                   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@map("recommendation_simulations")
+}
+
+model EntityNode {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  projectId  String   @map("project_id") @db.Uuid
+  entityName String   @map("entity_name")
+  entityType String   @map("entity_type")
+  properties Json?    @default("{}")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
+  project    Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@map("entity_nodes")
+}
+
+model EntityRelationship {
+  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  projectId        String   @map("project_id") @db.Uuid
+  sourceNodeId     String   @map("source_node_id") @db.Uuid
+  targetNodeId     String   @map("target_node_id") @db.Uuid
+  relationshipType String   @map("relationship_type")
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz
+  project          Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@map("entity_relationships")
+}
+
+model ContentCoverage {
+  id                  String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  projectId           String   @map("project_id") @db.Uuid
+  topicName           String   @map("topic_name")
+  coverageScore       Float?   @map("coverage_score")
+  questionCoverage    String[] @default([]) @map("question_coverage")
+  keywordCoverage     String[] @default([]) @map("keyword_coverage")
+  faqCoverage         String[] @default([]) @map("faq_coverage")
+  contentDepth        String?  @map("content_depth")
+  missingContentAreas String[] @default([]) @map("missing_content_areas")
+  createdAt           DateTime @default(now()) @map("created_at") @db.Timestamptz
+  project             Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@map("content_coverage")
+}

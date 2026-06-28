@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { API_BASE, authHeader } from "../lib/config";
 
 interface AnalyticsData {
   trends: any;
@@ -58,7 +59,7 @@ const ScoreSparkline = ({ runs, metricKey, color }: { runs: any[]; metricKey: st
   );
 };
 
-export default function AdvancedAnalyticsTab({ projectId }: { projectId: string }) {
+export default function AdvancedAnalyticsTab({ projectId, userId }: { projectId: string; userId: string }) {
   const [analytics, setAnalytics] = useState<AnalyticsData | null>(null);
   const [regressions, setRegressions] = useState<any[]>([]);
   const [rootCauses, setRootCauses] = useState<any[]>([]);
@@ -76,15 +77,14 @@ export default function AdvancedAnalyticsTab({ projectId }: { projectId: string 
     setLoading(true);
     setError(null);
     try {
-      const headers = { "Content-Type": "application/json" };
-      const apiBase = "http://localhost:8000/api/v1/analysis";
+      const headers = { "Content-Type": "application/json", ...authHeader(userId) };
       
       const [analyticsRes, regressionsRes, rootCausesRes, heatmapRes, opportunitiesRes] = await Promise.all([
-        fetch(`${apiBase}/analytics/${projectId}`, { headers }),
-        fetch(`${apiBase}/regressions/${projectId}`, { headers }),
-        fetch(`${apiBase}/root-causes/${projectId}`, { headers }),
-        fetch(`${apiBase}/heatmap/${projectId}`, { headers }),
-        fetch(`${apiBase}/opportunities/${projectId}`, { headers }),
+        fetch(`${API_BASE}/analysis/analytics/${projectId}`, { headers }),
+        fetch(`${API_BASE}/analysis/regressions/${projectId}`, { headers }),
+        fetch(`${API_BASE}/analysis/root-causes/${projectId}`, { headers }),
+        fetch(`${API_BASE}/analysis/heatmap/${projectId}`, { headers }),
+        fetch(`${API_BASE}/analysis/opportunities/${projectId}`, { headers }),
       ]);
 
       if (!analyticsRes.ok) throw new Error("Failed to load analytics");
@@ -100,7 +100,7 @@ export default function AdvancedAnalyticsTab({ projectId }: { projectId: string 
     } finally {
       setLoading(false);
     }
-  }, [projectId]);
+  }, [projectId, userId]);
 
   useEffect(() => {
     fetchData();

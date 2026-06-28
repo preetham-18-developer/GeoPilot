@@ -83,6 +83,10 @@ in_memory_cache = InMemoryCache()
 
 # Initialize Redis client
 redis_client = None
+_last_ping_time = 0.0
+_redis_online = False
+_PING_COOLDOWN_SECONDS = 10.0
+
 if REDIS_AVAILABLE:
     try:
         redis_host = os.getenv("REDIS_HOST", "localhost")
@@ -98,23 +102,38 @@ if REDIS_AVAILABLE:
         )
         # Test connection
         redis_client.ping()
+        _redis_online = True
         logger.info(f"Connected to Redis successfully at {redis_url}")
     except Exception as e:
-        logger.warning(f"Redis not available, falling back to in-memory caching. Error: {e}")
-        redis_client = None
+        logger.warning(f"Redis not available on startup, falling back to in-memory caching. Error: {e}")
+        _redis_online = False
+    _last_ping_time = time.time()
 else:
     logger.info("redis-py client not installed. Falling back to in-memory caching.")
 
 
 def _get_redis() -> Optional[Any]:
-    global redis_client
-    if not redis_client:
+    global redis_client, _last_ping_time, _redis_online, _PING_COOLDOWN_SECONDS
+    if not REDIS_AVAILABLE or not redis_client:
         return None
+    
+    current_time = time.time()
+    
+    # If Redis was last known to be offline, respect the cooldown period
+    if not _redis_online and (current_time - _last_ping_time) < _PING_COOLDOWN_SECONDS:
+        return None
+        
     try:
+        _last_ping_time = current_time
         redis_client.ping()
+        if not _redis_online:
+            logger.info("Redis has reconnected successfully.")
+        _redis_online = True
         return redis_client
-    except Exception:
-        logger.warning("Redis ping failed, fallback to in-memory cache for this request.")
+    except Exception as e:
+        if _redis_online:
+            logger.warning(f"Redis went offline: {e}. Fallback to in-memory cache.")
+        _redis_online = False
         return None
 
 

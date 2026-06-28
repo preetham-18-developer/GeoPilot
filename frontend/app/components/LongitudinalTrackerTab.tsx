@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { API_BASE, authHeader } from "../lib/config";
 
 interface ScorePoint {
   created_at: string;
@@ -88,7 +89,7 @@ const MiniSparkline = ({ runs, metricKey, color }: { runs: ScorePoint[]; metricK
   );
 };
 
-export default function LongitudinalTrackerTab({ projectId }: { projectId: string }) {
+export default function LongitudinalTrackerTab({ projectId, userId }: { projectId: string; userId: string }) {
   const [data, setData] = useState<HistoricalData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -99,7 +100,7 @@ export default function LongitudinalTrackerTab({ projectId }: { projectId: strin
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/analysis/historical-metrics/${projectId}`, { credentials: "include" });
+      const res = await fetch(`${API_BASE}/analysis/historical-metrics/${projectId}`, { headers: authHeader(userId) });
       if (!res.ok) throw new Error(await res.text());
       setData(await res.json());
     } catch {
@@ -107,7 +108,7 @@ export default function LongitudinalTrackerTab({ projectId }: { projectId: strin
     } finally {
       setLoading(false);
     }
-  }, [projectId]);
+  }, [projectId, userId]);
 
   useEffect(() => { fetchHistory(); }, [fetchHistory]);
 

@@ -26,6 +26,10 @@ Strict No-Hallucination Audit:
 2. If the fact contains any fabricated, embellished, or missing details not found in the content, you MUST adjust it, or mark it as "NOT FOUND".
 3. Find the exact sentence/paragraph in the page content that serves as evidence.
 4. Calculate a verification confidence score between 0.0 and 1.0 (1.0 = perfect verbatim match, 0.0 = completely fabricated).
+5. You are forbidden from using outside knowledge.
+6. Use only supplied page content.
+7. If information is unavailable, return UNKNOWN.
+8. Do not infer founders, years, locations, industries, products, or services.
 
 Your response must be a valid JSON object. Do not wrap it in markdown code blocks or add text. Format:
 {{

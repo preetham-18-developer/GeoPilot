@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { API_BASE, authHeader } from "../lib/config";
+import { motion } from "framer-motion";
 
 interface RealityCheck {
   id: string;
@@ -48,7 +50,7 @@ const ConfidenceBar = ({ value }: { value: number }) => {
   );
 };
 
-export default function RealityCheckerTab({ projectId }: { projectId: string }) {
+export default function RealityCheckerTab({ projectId, userId }: { projectId: string; userId: string }) {
   const [checks, setChecks] = useState<RealityCheck[]>([]);
   const [metrics, setMetrics] = useState<RealityMetrics | null>(null);
   const [loading, setLoading] = useState(true);
@@ -63,8 +65,8 @@ export default function RealityCheckerTab({ projectId }: { projectId: string }) 
     setError(null);
     try {
       const [checksRes, metricsRes] = await Promise.all([
-        fetch(`/api/analysis/reality-check/${projectId}`, { credentials: "include" }),
-        fetch(`/api/analysis/reality-check/metrics/${projectId}`, { credentials: "include" }),
+        fetch(`${API_BASE}/analysis/reality-check/${projectId}`, { headers: authHeader(userId) }),
+        fetch(`${API_BASE}/analysis/reality-check/metrics/${projectId}`, { headers: authHeader(userId) }),
       ]);
       const checksData = await checksRes.json();
       const metricsData = await metricsRes.json();
@@ -75,7 +77,7 @@ export default function RealityCheckerTab({ projectId }: { projectId: string }) 
     } finally {
       setLoading(false);
     }
-  }, [projectId]);
+  }, [projectId, userId]);
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
 
@@ -83,9 +85,9 @@ export default function RealityCheckerTab({ projectId }: { projectId: string }) 
     setGenerating(true);
     setError(null);
     try {
-      const res = await fetch(`/api/analysis/reality-check/${projectId}/generate`, {
+      const res = await fetch(`${API_BASE}/analysis/reality-check/${projectId}/generate`, {
         method: "POST",
-        credentials: "include",
+        headers: authHeader(userId),
       });
       const data = await res.json();
       setChecks(data.reality_checks || []);
@@ -99,7 +101,7 @@ export default function RealityCheckerTab({ projectId }: { projectId: string }) 
 
   const fetchMetrics = async () => {
     try {
-      const res = await fetch(`/api/analysis/reality-check/metrics/${projectId}`, { credentials: "include" });
+      const res = await fetch(`${API_BASE}/analysis/reality-check/metrics/${projectId}`, { headers: authHeader(userId) });
       setMetrics(await res.json());
     } catch {}
   };
@@ -109,10 +111,9 @@ export default function RealityCheckerTab({ projectId }: { projectId: string }) 
     if (!state) return;
     setVerifyingId(checkId);
     try {
-      await fetch(`/api/analysis/reality-check/${projectId}/verify/${checkId}`, {
+      await fetch(`${API_BASE}/analysis/reality-check/${projectId}/verify/${checkId}`, {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
+        headers: { "Content-Type": "application/json", ...authHeader(userId) },
         body: JSON.stringify({
           chatgpt_mentions: state.chatgpt || "NO",
           gemini_mentions: state.gemini || "NO",
@@ -147,17 +148,42 @@ export default function RealityCheckerTab({ projectId }: { projectId: string }) 
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <div className="flex flex-col items-center gap-3">
-          <div className="w-8 h-8 border-2 border-violet-500 border-t-transparent rounded-full animate-spin" />
-          <span className="text-white/50 text-sm">Loading reality checks…</span>
+      <div className="space-y-6" aria-busy="true">
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="skeleton skeleton-title" style={{ width: "200px" }} />
+            <div className="skeleton skeleton-text mt-2" style={{ width: "300px" }} />
+          </div>
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="bg-white/5 border border-white/10 rounded-2xl p-4 space-y-2">
+              <div className="skeleton skeleton-text" style={{ width: "40%", height: "24px" }} />
+              <div className="skeleton skeleton-text" style={{ width: "60%" }} />
+              <div className="skeleton skeleton-text" style={{ width: "80%" }} />
+            </div>
+          ))}
+        </div>
+        <div className="space-y-3">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <div key={i} className="bg-white/5 border border-white/10 rounded-2xl p-5 space-y-4">
+              <div className="skeleton skeleton-title" style={{ width: "40%" }} />
+              <div className="skeleton skeleton-text" style={{ width: "80%" }} />
+              <div className="skeleton skeleton-text" style={{ width: "60%" }} />
+            </div>
+          ))}
         </div>
       </div>
     );
   }
 
   return (
-    <div className="space-y-6">
+    <motion.div
+      initial={{ opacity: 0, y: 15 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.4 }}
+      className="space-y-6"
+    >
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -224,9 +250,26 @@ export default function RealityCheckerTab({ projectId }: { projectId: string }) 
           No reality checks generated yet. Click &quot;Regenerate Queries&quot; to start.
         </div>
       ) : (
-        <div className="space-y-3">
+        <motion.div
+          initial="hidden"
+          animate="visible"
+          variants={{
+            hidden: { opacity: 0 },
+            visible: {
+              opacity: 1,
+              transition: {
+                staggerChildren: 0.05
+              }
+            }
+          }}
+          className="space-y-3"
+        >
           {checks.map((check) => (
-            <div
+            <motion.div
+              variants={{
+                hidden: { opacity: 0, y: 10 },
+                visible: { opacity: 1, y: 0 }
+              }}
               key={check.id}
               className={`bg-white/5 border rounded-2xl p-5 transition-all ${check.is_verified ? "border-emerald-500/30" : "border-white/10"}`}
             >
@@ -303,10 +346,10 @@ export default function RealityCheckerTab({ projectId }: { projectId: string }) 
                   </div>
                 )}
               </div>
-            </div>
+            </motion.div>
           ))}
-        </div>
+        </motion.div>
       )}
-    </div>
+    </motion.div>
   );
 }

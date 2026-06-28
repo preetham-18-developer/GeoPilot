@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { API_BASE, authHeader } from "../lib/config";
 
 interface GapItem {
   dimension: string;
@@ -114,7 +115,7 @@ const DimensionBar = ({ item }: { item: GapItem }) => {
   );
 };
 
-export default function CompetitorBenchmarkTab({ projectId }: { projectId: string }) {
+export default function CompetitorBenchmarkTab({ projectId, userId }: { projectId: string; userId: string }) {
   const [report, setReport] = useState<BenchmarkReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -127,7 +128,7 @@ export default function CompetitorBenchmarkTab({ projectId }: { projectId: strin
     else setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/analysis/competitor-benchmark/${projectId}`, { credentials: "include" });
+      const res = await fetch(`${API_BASE}/analysis/competitor-benchmark/${projectId}`, { headers: authHeader(userId) });
       if (!res.ok) throw new Error(await res.text());
       setReport(await res.json());
     } catch (e: unknown) {
@@ -136,7 +137,7 @@ export default function CompetitorBenchmarkTab({ projectId }: { projectId: strin
       setLoading(false);
       setRefreshing(false);
     }
-  }, [projectId]);
+  }, [projectId, userId]);
 
   useEffect(() => { fetchBenchmark(); }, [fetchBenchmark]);
 
