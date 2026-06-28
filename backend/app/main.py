@@ -65,7 +65,12 @@ app.add_middleware(PerformanceMetricsMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # For production, restrict this
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "https://geo-pilot-nine.vercel.app",
+    ],
+    allow_origin_regex="https://geo-pilot-.*\\.vercel\\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
