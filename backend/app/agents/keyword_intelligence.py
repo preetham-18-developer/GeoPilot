@@ -1,6 +1,7 @@
 import json
 import logging
 import random
+import re
 from typing import Dict, Any, List
 from langchain_core.prompts import ChatPromptTemplate
 from app.core.llm import get_llm
@@ -9,72 +10,62 @@ from app.core.scoring import compute_keyword_scores
 
 logger = logging.getLogger(__name__)
 
-KEYWORD_PROMPT = """You are a highly analytical V3 Keyword Intelligence Agent.
-Your mission is to generate a comprehensive semantic keyword list for this business.
-Keywords must NEVER be generated independently. They must originate strictly from the recommendation queries, verified business facts, pain points, desired outcomes, industry topics, or competitor gaps.
+KEYWORD_SYSTEM_PROMPT = """You extract SEO keywords from business information.
+Keywords are short phrases people type into Google.
+They are 1-5 words. Natural. Specific. No marketing language.
+Return JSON array only. No markdown, no code blocks."""
 
-Company: {company_name}
-Industry: {industry}
-Description: {description}
-Website: {website_url}
+KEYWORD_USER_PROMPT = """Business: {business_type} in {location}
+Services: {services}
+Target customers: {customers}
 
-Verified Business Facts:
-{verified_facts_json}
+Generate 200 SEO keywords.
 
-Pre-Query Discovery Metadata:
-{pre_query_discovery_json}
+Think about what people type when:
+1. Searching for this type of service
+2. Looking for a course or program like this
+3. Trying to solve a specific problem
+4. Looking for providers in this location
 
-Sample Recommendation Queries:
-{questions_snippet}
+Format: short, natural phrases people actually type.
 
-Please generate at least 50 high-quality seed keywords and key phrases.
-Categorize and score each keyword/phrase into:
-- keyword: The keyword text.
-- keyword_type: Must be exactly one of: 'Primary', 'Commercial', 'Problem', 'Outcome', 'Topic', 'Industry', 'Entity', 'Location', 'Role', 'Voice Search', 'AI Search', 'Long Tail', 'Semantic', 'Authority', 'Trend', 'Opportunity'.
-- intent: Must be exactly one of: 'informational', 'navigational', 'commercial', 'transactional'.
-- cluster: A descriptive theme cluster name (e.g., 'Canvas LMS Setup', 'Career Coaching Programs', 'Physics Simulations').
-- confidence_score: A float between 0.0 and 1.0 representing keyword relevance.
-- priority: Must be exactly one of: 'High', 'Medium', 'Low'.
-- difficulty_estimate: Must be exactly one of: 'Easy', 'Medium', 'Hard'.
-- opportunity_estimate: Must be exactly one of: 'High', 'Medium', 'Low'.
-- source: Must be exactly one of: 'Recommendation Queries', 'Verified Facts', 'Knowledge Graph', 'Pain Points', 'Outcomes', 'Industry Topics', 'Authority Sources', 'Competitor Topics'.
+BAD keywords (never generate these):
+- 'affordable professional mentorship solutions'
+- 'comprehensive career development programs'  
+- 'world-class SQL training excellence'
 
-Strict Quality & No-Hallucination Rules:
-- Keywords must directly connect to the real products, services, and locations of this business. If data is unavailable, return NOT_FOUND.
-- Do NOT generate shallow permutations or keyword stuffed text.
-- You are forbidden from using outside knowledge.
-- Use only supplied page content.
-- If information is unavailable, return UNKNOWN.
-- Do not infer founders, years, locations, industries, products, or services.
+GOOD keywords (generate like these):
+- 'sql course india'
+- 'career mentorship students'
+- 'tech job placement help'
+- 'weekend programming course'
+- '1 on 1 coding mentor'
+- 'women tech career program'
 
-Format your response as a valid JSON array of objects. Do not wrap it in markdown code blocks. Format:
-[
-  {{
-    "keyword": "LTI physics virtual labs",
-    "keyword_type": "Primary",
-    "intent": "commercial",
-    "cluster": "LMS Simulations",
-    "confidence_score": 0.95,
-    "priority": "High",
-    "difficulty_estimate": "Medium",
-    "opportunity_estimate": "High",
-    "source": "Verified Facts"
-  }}
-]
-"""
+Return JSON:
+[{{
+  "keyword": string,
+  "type": "PRIMARY"|"LONGTAIL"|"LOCAL"|"QUESTION"
+}}]"""
 
-import re
+def clean_content_for_ai(text: str) -> str:
+    if not text:
+        return ""
+    text = re.sub(r'http[s]?://\S+', '', text)
+    text = re.sub(r'www\.\S+', '', text)
+    text = re.sub(r'\S+@\S+\.\S+', '', text)
+    text = re.sub(r'[\+\d][\d\s\-\(\)]{8,}', '', text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
 
 def get_resolved_company_name(bi: Dict[str, Any], website_url: str) -> str:
     name = (bi or {}).get("company_name", "").strip()
     if not name or name.lower() in ["unknown", "unknown company", "the business", "business"]:
-        # Extract from website_url
         from urllib.parse import urlparse
         parsed = urlparse(website_url)
         domain = parsed.netloc or parsed.path
         if domain.startswith("www."):
             domain = domain[4:]
-        # Remove TLD
         parts = domain.split(".")
         if len(parts) > 1:
             name = parts[-2]
@@ -88,103 +79,53 @@ def get_resolved_company_name(bi: Dict[str, Any], website_url: str) -> str:
             name = name.title()
     return name
 
-def resolve_text_placeholders(text: str, bi: Dict[str, Any], website_url: str, state_pages: List[Dict[str, Any]] = None) -> str:
-    if not text:
-        return text
+def extract_keywords_from_questions(questions: List[Dict[str, Any]]) -> List[str]:
+    candidates = []
+    question_words = {"where", "what", "how", "which", "can", "is", "are", "why", "who", "should", "does", "do", "would"}
+    stop_words = {"a", "the", "an", "in", "of", "to", "for", "with", "on", "at", "by", "from", "about"}
     
-    comp_name = get_resolved_company_name(bi, website_url)
-    
-    # Standalone replacements
-    text = re.sub(r'\b[Tt]he\s+[Bb]usiness\b', comp_name, text)
-    text = re.sub(r'\b[Uu]nknown\s+[Cc]ompany\b', comp_name, text)
-    
-    # Resolve curly brace placeholders
-    pre_query = (bi or {}).get("pre_query_discovery", {}) or {}
-    
-    def clean_list(lst):
-        if not lst:
-            return []
-        return [str(x).strip() for x in lst if x and str(x).strip().upper() != "NOT_FOUND"]
-    
-    products = clean_list(pre_query.get("products", [])) or [comp_name]
-    services = clean_list(pre_query.get("services", [])) or [(bi or {}).get("industry", "archival and historical library services")]
-    topics = clean_list(pre_query.get("industry_topics", [])) or ["historical collections", "research archives"]
-    technologies = clean_list(pre_query.get("technologies", [])) or ["digital cataloging", "online archives"]
-    processes = clean_list(pre_query.get("processes", [])) or ["historical research", "academic study"]
-    regulations = clean_list(pre_query.get("regulations", [])) or ["preservation guidelines"]
-    standards = clean_list(pre_query.get("standards", [])) or ["archival standards"]
-    
-    # Personas
-    personas_dict = pre_query.get("buyer_personas", {}) or {}
-    personas = [k for k, v in personas_dict.items() if v and str(v).upper() != "NOT_FOUND"] or ["researcher", "historian", "visitor", "member"]
-    
-    # Pain points
-    pains_dict = pre_query.get("pain_points", {}) or {}
-    pain_points = [v for k, v in pains_dict.items() if v and str(v).upper() != "NOT_FOUND"] or ["accessing historical records", "finding rare manuscripts"]
-    
-    # Outcomes
-    outcomes_dict = pre_query.get("desired_outcomes", {}) or {}
-    outcomes = [v for k, v in outcomes_dict.items() if v and str(v).upper() != "NOT_FOUND"] or ["discovering primary sources", "conducting academic research"]
-    
-    # Entity
-    graph_entities = []
-    if not graph_entities:
-        graph_entities = [comp_name]
+    for q_item in questions:
+        q_text = q_item.get("question", "").lower()
+        q_clean = re.sub(r'[^\w\s]', '', q_text)
+        words = q_clean.split()
         
-    local_rng = random.Random(hash(text))
-    
-    replacements = {
-        "product": products,
-        "persona": personas,
-        "service": services,
-        "topic": topics,
-        "technology": technologies,
-        "tech": technologies,  # resolves {tech} key mapping issue
-        "process": processes,
-        "standards": standards,
-        "regulations": regulations,
-        "pain_point": pain_points,
-        "outcome": outcomes,
-        "entity": graph_entities
-    }
-    
-    for key, lst in replacements.items():
-        placeholder = "{" + key + "}"
-        if placeholder in text:
-            val = local_rng.choice(lst) if lst else ""
-            text = text.replace(placeholder, val)
-            
-    text = text.strip().replace("  ", " ")
-    text = re.sub(r'\ba\s+([aeiouAEIOU])', r'an \1', text)
-    return text
+        filtered_words = [w for w in words if w not in question_words and w not in stop_words]
+        
+        n = len(filtered_words)
+        for length in range(2, min(5, n + 1)):
+            for i in range(n - length + 1):
+                phrase = " ".join(filtered_words[i:i+length])
+                candidates.append(phrase)
+                
+    return candidates
 
 class KeywordIntelligenceAgent:
     def __init__(self):
         self.llm = get_llm()
-        self.prompt = ChatPromptTemplate.from_template(KEYWORD_PROMPT)
+        self.prompt = ChatPromptTemplate.from_messages([
+            ("system", KEYWORD_SYSTEM_PROMPT),
+            ("user", KEYWORD_USER_PROMPT)
+        ])
 
     def discover_keywords(self, verified_facts: List[Dict[str, Any]], business_intelligence: Dict[str, Any] = None, state_questions: List[Dict[str, Any]] = None, website_url: str = "") -> List[Dict[str, Any]]:
-        """Generates V3 seed keywords based on discovery metadata, queries, and facts."""
         try:
-            facts_str = json.dumps(verified_facts, indent=2) if verified_facts else "[]"
             bi = business_intelligence or {}
-            pre_query = bi.get("pre_query_discovery", {})
-            pre_query_str = json.dumps(pre_query, indent=2) if pre_query else "{}"
+            pre_query = bi.get("pre_query_discovery", {}) or {}
             
-            # Use top 10 questions for snippet context
-            q_snippet = ""
-            if state_questions:
-                q_texts = [q.get("question", "") for q in state_questions[:10] if q.get("question")]
-                q_snippet = "\n".join(q_texts)
+            def clean_list(lst):
+                if not lst:
+                    return []
+                return [str(x).strip() for x in lst if x and str(x).strip().upper() != "NOT_FOUND"]
+                
+            services = clean_list(pre_query.get("services", [])) or [bi.get("industry", "industry solutions")]
+            personas_dict = pre_query.get("buyer_personas", {}) or {}
+            personas = [k for k, v in personas_dict.items() if v and str(v).upper() != "NOT_FOUND"] or ["student", "job seeker"]
             
             formatted_prompt = self.prompt.format_messages(
-                company_name=bi.get("company_name", "Unknown Company"),
-                industry=bi.get("industry", "Unknown Industry"),
-                description=bi.get("description", "NOT FOUND"),
-                website_url=website_url,
-                verified_facts_json=facts_str[:4000],
-                pre_query_discovery_json=pre_query_str[:4000],
-                questions_snippet=q_snippet[:2000] or "Not available."
+                business_type=bi.get("industry", bi.get("business_type", "Business")),
+                location=f"{bi.get('city', 'online')}, {bi.get('country', 'online')}",
+                services=", ".join(services),
+                customers=", ".join(personas)
             )
             response = self.llm.invoke(formatted_prompt)
             
@@ -195,227 +136,230 @@ class KeywordIntelligenceAgent:
                 resp_text = resp_text[:-3]
             resp_text = resp_text.strip()
             
-            return json.loads(resp_text)
+            raw_kws = json.loads(resp_text)
+            
+            mapped_kws = []
+            for item in raw_kws:
+                mapped = self.map_to_db_format(item, bi)
+                mapped_kws.append(mapped)
+                
+            return mapped_kws
         except Exception as e:
             logger.error(f"Error in V3 Keyword Discovery LLM execution: {e}")
             return []
 
+    def map_to_db_format(self, llm_kw: Dict[str, Any], bi: Dict[str, Any]) -> Dict[str, Any]:
+        kw = llm_kw.get("keyword", "").strip()
+        kw_type = llm_kw.get("type", "PRIMARY").upper()
+        
+        db_type = "Primary"
+        db_intent = "informational"
+        
+        if kw_type == "PRIMARY":
+            db_type = "Primary"
+            db_intent = "commercial"
+        elif kw_type == "LONGTAIL":
+            db_type = "Long Tail"
+            db_intent = "informational"
+        elif kw_type == "LOCAL":
+            db_type = "Location"
+            db_intent = "navigational"
+        elif kw_type == "QUESTION":
+            db_type = "Voice Search"
+            db_intent = "informational"
+            
+        return {
+            "keyword": kw,
+            "keyword_type": db_type,
+            "intent": db_intent,
+            "cluster": bi.get("industry", "General") + " Solutions",
+            "confidence_score": 0.95,
+            "priority": "Medium",
+            "difficulty_estimate": "Medium",
+            "opportunity_estimate": "High",
+            "source": "Verified Facts"
+        }
+
 def run_keyword_intelligence(state: AgentState) -> Dict[str, Any]:
-    """Node function that executes keyword intelligence discovery and expands it to 5000+ scored keywords."""
-    logger.info("Running V3 Keyword Intelligence Node...")
+    logger.info("Running V3 Keyword Intelligence Node (Complete Refactor)...")
     agent = KeywordIntelligenceAgent()
     bi = state.get("business_intelligence", {})
+    website_url = state.get("website_url", "")
+    comp_name = get_resolved_company_name(bi, website_url).lower()
     
     seeds = agent.discover_keywords(
         state.get("verified_facts", []),
         business_intelligence=bi,
         state_questions=state.get("questions", []),
-        website_url=state.get("website_url", "")
+        website_url=website_url
     )
     
-    # 1. Fallback seeds if LLM call failed or returned empty list
-    if not seeds:
-        logger.warning("No seed keywords generated. Using fallback seeds.")
-        comp_name = bi.get("company_name", "the business")
-        industry = bi.get("industry", "industry solutions")
-        seeds = [
-            {
-                "keyword": f"{comp_name} {industry}",
-                "keyword_type": "Primary",
-                "intent": "commercial",
-                "cluster": "General",
-                "confidence_score": 0.90,
-                "priority": "High",
-                "difficulty_estimate": "Medium",
-                "opportunity_estimate": "High",
-                "source": "Verified Facts"
-            }
-        ]
-
-    expanded_keywords = []
-    seen_keywords = set()
+    # 1. Extract raw keyword candidates from questions (Step 1)
+    extracted_candidates = extract_keywords_from_questions(state.get("questions", []))
     
-    # 2. Add seeds first
-    for seed in seeds:
-        kw_text = seed.get("keyword", "").strip()
-        if kw_text and kw_text.lower() not in seen_keywords:
-            seen_keywords.add(kw_text.lower())
-            expanded_keywords.append(seed)
-            
-    # 3. Pull V3 pre-query discovery entities and terms
+    # 2. Get locations and core topics
+    city = bi.get("city") or ""
+    country = bi.get("country") or ""
+    if city.lower() in ["unknown", "not_found", "online"]:
+        city = ""
+    if country.lower() in ["unknown", "not_found", "online"]:
+        country = ""
+        
     pre_query = bi.get("pre_query_discovery", {}) or {}
-    
-    # Helper to clean lists of potential NOT_FOUND strings
     def clean_list(lst):
         if not lst:
             return []
         return [str(x).strip() for x in lst if x and str(x).strip().upper() != "NOT_FOUND"]
-
-    products = clean_list(pre_query.get("products", [])) or [bi.get("company_name", "the business")]
+    
     services = clean_list(pre_query.get("services", [])) or [bi.get("industry", "industry solutions")]
     topics = clean_list(pre_query.get("industry_topics", [])) or ["optimization", "solutions"]
-    technologies = clean_list(pre_query.get("technologies", [])) or ["AI", "digital tools"]
-    processes = clean_list(pre_query.get("processes", [])) or ["operations", "management"]
-    regulations = clean_list(pre_query.get("regulations", [])) or ["compliance rules"]
-    standards = clean_list(pre_query.get("standards", [])) or ["quality standards"]
-
-    # Personas / Roles
-    personas_dict = pre_query.get("buyer_personas", {}) or {}
-    personas = [k for k, v in personas_dict.items() if v and str(v).upper() != "NOT_FOUND"]
-    if not personas:
-        personas = ["CEO", "Manager", "Procurement Officer", "Operations Lead"]
-
-    # Pain points
-    pains_dict = pre_query.get("pain_points", {}) or {}
-    pain_points = [v for k, v in pains_dict.items() if v and str(v).upper() != "NOT_FOUND"]
-    if not pain_points:
-        pain_points = ["operational overhead", "efficiency bottlenecks"]
-
-    # Outcomes
-    outcomes_dict = pre_query.get("desired_outcomes", {}) or {}
-    outcomes = [v for k, v in outcomes_dict.items() if v and str(v).upper() != "NOT_FOUND"]
-    if not outcomes:
-        outcomes = ["improving workflow efficiency", "reducing operational costs"]
-
-    # Knowledge Graph entities (from state)
-    graph_entities = [str(n.get("entity_name", "")) for n in state.get("entity_nodes", [])]
-    graph_entities = [e for e in graph_entities if e and e.upper() != "NOT_FOUND"]
-
-    # Semantic Keyword Builder Expansion Rules
-    local_rng = random.Random(42) # Thread-safe local random generator
     
-    combiner_patterns = [
-        ("{product} for {persona}", "Role", "commercial", "Verified Facts | Authority Sources"),
-        ("{service} for {persona}", "Role", "commercial", "Verified Facts | Authority Sources"),
-        ("{product} {topic}", "Topic", "informational", "Verified Facts | Industry Topics"),
-        ("best {product} to {outcome}", "Opportunity", "commercial", "Verified Facts | Outcomes"),
-        ("{tech} in {process}", "Long Tail", "informational", "Industry Topics"),
-        ("{tech} {standards} compliance", "Authority", "informational", "Industry Topics | Authority Sources"),
-        ("{product} complying with {regulations}", "Authority", "informational", "Verified Facts | Authority Sources"),
-        ("how to solve {pain_point} with {product}", "Problem", "commercial", "Pain Points | Verified Facts"),
-        ("{persona} guides to {topic}", "Semantic", "informational", "Industry Topics | Authority Sources"),
-        ("{service} {standards} checklist", "Authority", "informational", "Industry Topics | Authority Sources"),
-        ("pricing of {product} for {persona}", "Commercial", "commercial", "Verified Facts | Authority Sources"),
-        ("siri search for {product}", "Voice Search", "navigational", "Recommendation Queries"),
-        ("alexa find {product}", "Voice Search", "navigational", "Recommendation Queries"),
-        ("chatgpt recommended {product}", "AI Search", "commercial", "Recommendation Queries"),
-        ("perplexity alternatives for {product}", "AI Search", "commercial", "Recommendation Queries"),
-        ("{product} USA local {service}", "Location", "navigational", "Verified Facts"),
-        ("latest trends in {topic}", "Trend", "informational", "Industry Topics")
-    ]
-
-    if graph_entities:
-        combiner_patterns.append(("{entity} {topic}", "Entity", "informational", "Knowledge Graph"))
-
-    # Phase A: Semantic combinator loop
-    iterations = 0
-    max_iterations = 5000
-    while len(expanded_keywords) < 5050 and iterations < max_iterations:
-        iterations += 1
-        
-        pattern, kw_type, kw_intent, kw_source = local_rng.choice(combiner_patterns)
-        
-        fmt_persona = local_rng.choice(personas)
-        fmt_product = local_rng.choice(products)
-        fmt_service = local_rng.choice(services)
-        fmt_topic = local_rng.choice(topics)
-        fmt_tech = local_rng.choice(technologies)
-        fmt_proc = local_rng.choice(processes)
-        fmt_std = local_rng.choice(standards)
-        fmt_reg = local_rng.choice(regulations)
-        fmt_pain = local_rng.choice(pain_points)
-        fmt_out = local_rng.choice(outcomes)
-        fmt_entity = local_rng.choice(graph_entities) if graph_entities else "entity"
-        
-        try:
-            new_kw = pattern.format(
-                persona=fmt_persona,
-                product=fmt_product,
-                service=fmt_service,
-                topic=fmt_topic,
-                technology=fmt_tech,
-                process=fmt_proc,
-                standards=fmt_std,
-                regulations=fmt_reg,
-                pain_point=fmt_pain,
-                outcome=fmt_out,
-                entity=fmt_entity
-            )
+    core_topics = list(set(services + topics + [bi.get("industry", "solutions")]))
+    
+    # Add seeds to candidates
+    seed_texts = [s["keyword"] for s in seeds]
+    candidate_list = seed_texts + extracted_candidates
+    
+    # Step 2: Generate location variants
+    location_variants = []
+    for topic in core_topics:
+        t_clean = topic.strip().lower()
+        location_variants.append(t_clean)
+        location_variants.append(f"{t_clean} near me")
+        if city:
+            location_variants.append(f"{t_clean} {city.lower()}")
+            location_variants.append(f"{t_clean} in {city.lower()}")
+            location_variants.append(f"best {t_clean} {city.lower()}")
             
-            new_kw_clean = new_kw.strip().replace("  ", " ")
-            if new_kw_clean.lower() not in seen_keywords:
-                seen_keywords.add(new_kw_clean.lower())
-                
-                expanded_keywords.append({
-                    "keyword": new_kw_clean,
-                    "keyword_type": kw_type,
-                    "intent": kw_intent,
-                    "cluster": fmt_topic + " Setup" if "setup" in new_kw_clean.lower() or "implement" in new_kw_clean.lower() else fmt_topic + " Solutions",
-                    "source": kw_source
-                })
-        except Exception:
-            continue
-
-    # Phase B: Prefix/Suffix Modifier fallback expansion deterministically to ensure 5050+ keywords
-    prefixes = [
-        "best", "top", "affordable", "custom", "reliable", "secure", "modern", "certified", 
-        "professional", "local", "online", "cloud", "free", "enterprise", "strategic",
-        "innovative", "popular", "essential", "key", "recommended", "advanced", "standard",
-        "official", "expert", "trusted", "quality", "leading", "verified", "direct"
-    ]
-    
-    suffixes = [
-        "solutions", "platforms", "services", "tools", "agencies", "firms", "consultants", 
-        "features", "benefits", "cost", "pricing", "reviews", "ratings", "alternatives",
-        "near me", "USA", "online", "system", "software", "applications", "integration", 
-        "setup", "guide", "tutorial", "case study", "best practices", "compliance"
-    ]
-
-    if len(expanded_keywords) < 5050:
-        logger.info("Combinator permutations exhausted. Running Phase B modifier expansion...")
-        base_keywords = list(expanded_keywords)
+    # Step 3: Generate intent variants
+    intent_variants = []
+    for topic in core_topics:
+        t_clean = topic.strip().lower()
+        intent_variants.extend([
+            f"{t_clean} course",
+            f"{t_clean} program",
+            f"{t_clean} training",
+            f"{t_clean} platform",
+            f"{t_clean} online",
+            f"learn {t_clean}",
+            f"{t_clean} for beginners",
+            f"{t_clean} with placement"
+        ])
         
-        # We loop deterministically to generate exactly the required amount without collisions
-        for p in prefixes:
-            if len(expanded_keywords) >= 5050:
+    all_candidates = candidate_list + location_variants + intent_variants
+    
+    # Step 4: Apply strict filters
+    seen_keywords = set()
+    final_expanded = []
+    
+    # Build list of words present in seed topics to check relevance
+    seed_topic_words = set()
+    for topic in core_topics:
+        for word in topic.lower().split():
+            if len(word) > 3:
+                seed_topic_words.add(word)
+                
+    ADJECTIVE_BLACKLIST = {
+        'affordable', 'comprehensive', 'professional',
+        'excellent', 'outstanding', 'premier', 'leading',
+        'top-notch', 'world-class', 'cutting-edge', 'great', 'best'
+    }
+    
+    for kw in all_candidates:
+        kw_clean = kw.strip().replace("  ", " ").lower()
+        
+        # Word count constraint (1-5 words)
+        words = kw_clean.split()
+        if not (1 <= len(words) <= 5):
+            continue
+            
+        # Check duplicate
+        if kw_clean in seen_keywords:
+            continue
+            
+        # Discard company name
+        if comp_name in kw_clean or "the library company" in kw_clean or "the library" in kw_clean:
+            continue
+            
+        # Discard URLs/domains
+        if "http" in kw_clean or "www." in kw_clean or ".com" in kw_clean:
+            continue
+            
+        # Discard pure adjectives
+        if all(w in ADJECTIVE_BLACKLIST for w in words):
+            continue
+            
+        # Discard if doesn't contain a word matching target topics
+        if seed_topic_words and not any(w in seed_topic_words for w in words):
+            continue
+            
+        seen_keywords.add(kw_clean)
+        
+        # Map back to structured object
+        # Classify keyword_type dynamically
+        kw_type = "Primary"
+        kw_intent = "informational"
+        
+        if "near me" in kw_clean or (city and city.lower() in kw_clean):
+            kw_type = "Location"
+            kw_intent = "navigational"
+        elif "course" in kw_clean or "program" in kw_clean or "training" in kw_clean or "pricing" in kw_clean:
+            kw_type = "Commercial"
+            kw_intent = "commercial"
+        elif len(words) >= 4:
+            kw_type = "Long Tail"
+            kw_intent = "informational"
+            
+        final_expanded.append({
+            "keyword": kw.title() if len(words) <= 3 else kw[0].upper() + kw[1:] if kw else "",
+            "keyword_type": kw_type,
+            "intent": kw_intent,
+            "cluster": bi.get("industry", "General") + " Solutions",
+            "source": "Recommendation Queries" if kw in extracted_candidates else "Verified Facts"
+        })
+        
+    # Scale to 5000+ keywords or ensure substantial list
+    # If list is below 5000, we add long tail permutations
+    if len(final_expanded) < 5000:
+        logger.info(f"Adding semantic permutations to reach target volume (current: {len(final_expanded)})...")
+        extra_suffixes = ["for career support", "with placement help", "for students", "for tech jobs", "classes near me"]
+        base_list = list(final_expanded)
+        
+        for kw_item in base_list:
+            if len(final_expanded) >= 5050:
                 break
-            for seed_item in base_keywords:
-                if len(expanded_keywords) >= 5050:
+            for suffix in extra_suffixes:
+                if len(final_expanded) >= 5050:
                     break
-                for s in suffixes:
-                    if len(expanded_keywords) >= 5050:
-                        break
                     
-                    kw_text = seed_item["keyword"]
-                    new_kw_clean = f"{p} {kw_text} {s}".strip().replace("  ", " ")
-                    if new_kw_clean.lower() not in seen_keywords:
-                        seen_keywords.add(new_kw_clean.lower())
-                        
-                        expanded_keywords.append({
-                            "keyword": new_kw_clean,
-                            "keyword_type": "Long Tail" if " " in new_kw_clean else "Short Tail",
-                            "intent": seed_item["intent"],
-                            "cluster": seed_item["cluster"],
-                            "source": seed_item["source"]
-                        })
-
-    # Resolve all placeholders and clean up text for all expanded keywords
-    for item in expanded_keywords:
-        item["keyword"] = resolve_text_placeholders(item.get("keyword", ""), bi, state.get("website_url", ""))
+                new_kw = f"{kw_item['keyword']} {suffix}"
+                new_words = new_kw.split()
+                if len(new_words) <= 5 and new_kw.lower() not in seen_keywords:
+                    seen_keywords.add(new_kw.lower())
+                    final_expanded.append({
+                        "keyword": new_kw,
+                        "keyword_type": "Long Tail",
+                        "intent": "informational",
+                        "cluster": kw_item["cluster"],
+                        "source": "Recommendation Queries"
+                    })
 
     # Ensure EVERY single keyword is scored deterministically
-    final_keywords = []
-    for item in expanded_keywords:
+    final_scored_keywords = []
+    crawled_pages = state.get("crawled_pages", [])
+    entity_nodes = state.get("entity_nodes", [])
+    
+    for item in final_expanded:
         scores = compute_keyword_scores(
             item["keyword"],
             item["keyword_type"],
             item["intent"],
             bi,
-            state.get("crawled_pages", []),
-            state.get("entity_nodes", [])
+            crawled_pages,
+            entity_nodes
         )
         item.update(scores)
-        final_keywords.append(item)
-
-    logger.info(f"V3 Keyword Intelligence finished. Expanded seeds to {len(final_keywords)} keywords.")
-    return {"keywords": final_keywords}
+        final_scored_keywords.append(item)
+        
+    logger.info(f"V3 Keyword Intelligence finished. Scored {len(final_scored_keywords)} diverse keywords.")
+    return {"keywords": final_scored_keywords}
