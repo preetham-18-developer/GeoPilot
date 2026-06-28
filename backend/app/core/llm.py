@@ -1089,6 +1089,19 @@ def get_llm():
         except Exception as e:
             logger.warning(f"Failed to initialize OpenAI LLM: {e}")
 
+    nvidia_key = os.getenv("NVIDIA_API_KEY")
+    if not real_llm and nvidia_key and nvidia_key != "mock_key":
+        try:
+            real_llm = ChatOpenAI(
+                model=os.getenv("NVIDIA_MODEL", "nvidia/llama-3.1-nemotron-ultra-253b-v1"),
+                api_key=nvidia_key,
+                base_url=os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1"),
+                temperature=0.1,
+                max_retries=2
+            )
+        except Exception as e:
+            logger.warning(f"Failed to initialize NVIDIA LLM: {e}")
+
     # Wrap the real LLM in the FallbackMockLLM handler
     return FallbackMockLLM(real_llm)
 
