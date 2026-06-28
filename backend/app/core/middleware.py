@@ -57,9 +57,9 @@ def _save_metrics_async(request_time: float, hits: int, misses: int, memory_usag
 
 class PerformanceMetricsMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        # Exclude static/health check queries to avoid cluttering metrics database
+        # Exclude OPTIONS request (CORS Preflight) and static/health checks
         path = request.url.path
-        if any(path.startswith(prefix) for prefix in ["/docs", "/redoc", "/openapi.json", "/favicon.ico"]):
+        if request.method == "OPTIONS" or any(path.startswith(prefix) for prefix in ["/docs", "/redoc", "/openapi.json", "/favicon.ico"]):
             return await call_next(request)
 
         start_time = time.time()
