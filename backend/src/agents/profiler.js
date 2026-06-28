@@ -10,7 +10,7 @@ const nvidia = new OpenAI({
   maxRetries: 2
 });
 
-const PROFILER_MODEL = 'nvidia/llama-3.1-nemotron-ultra-253b-v1';
+const PROFILER_MODEL = 'meta/llama-3.3-70b-instruct';
 
 async function runProfiler(projectId, emit) {
   emit(projectId, 'agent:stream', '→ Starting Business Profiler (Pass 1: Core pages)');

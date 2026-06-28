@@ -51,7 +51,7 @@ async function runAISimulator(projectId, state) {
   let simulations = [];
   try {
     const response = await axios.post(INVOKE_URL, {
-      model: "nvidia/llama-3.1-nemotron-ultra-253b-v1",
+      model: "meta/llama-3.3-70b-instruct",
       messages: [
         {
           role: "user",

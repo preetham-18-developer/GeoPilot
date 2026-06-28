@@ -1053,55 +1053,17 @@ class FallbackMockLLM:
 
 
 def get_llm():
-    """Initializes and returns the configured Chat LLM wrapped in FallbackMockLLM."""
-    if os.getenv("BYPASS_REAL_LLM", "true") == "true":
-        logger.info("[get_llm] Bypassing real LLM check and returning FallbackMockLLM(None) directly.")
-        return FallbackMockLLM(None)
-
-    openai_key = settings.OPENAI_API_KEY
-    if not openai_key or openai_key == ".\\.c":
-        openai_key = os.getenv("OPEN_API_KEY", "")
-    gemini_key = settings.GEMINI_API_KEY
-
-    real_llm = None
-    if gemini_key:
-        for model in ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.5-flash"]:
-            try:
-                real_llm = ChatGoogleGenerativeAI(
-                    model=model,
-                    google_api_key=gemini_key,
-                    temperature=0.1,
-                    max_retries=2  # Deduce retry wait times
-                )
-                break
-            except Exception as e:
-                logger.warning(f"Failed to initialize Gemini {model}: {e}")
-                continue
-
-    if not real_llm and openai_key:
-        try:
-            real_llm = ChatOpenAI(
-                model="gpt-4o-mini",
-                api_key=openai_key,
-                temperature=0.1,
-                max_retries=2
-            )
-        except Exception as e:
-            logger.warning(f"Failed to initialize OpenAI LLM: {e}")
-
+    """Initializes and returns the Chat LLM configured for NVIDIA only."""
     nvidia_key = os.getenv("NVIDIA_API_KEY")
-    if not real_llm and nvidia_key and nvidia_key != "mock_key":
-        try:
-            real_llm = ChatOpenAI(
-                model=os.getenv("NVIDIA_MODEL", "nvidia/llama-3.1-nemotron-ultra-253b-v1"),
-                api_key=nvidia_key,
-                base_url=os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1"),
-                temperature=0.1,
-                max_retries=2
-            )
-        except Exception as e:
-            logger.warning(f"Failed to initialize NVIDIA LLM: {e}")
+    if not nvidia_key or nvidia_key == "mock_key":
+        raise ValueError("NVIDIA_API_KEY is not configured or is set to 'mock_key'. NVIDIA is required.")
 
-    # Wrap the real LLM in the FallbackMockLLM handler
-    return FallbackMockLLM(real_llm)
+    logger.info("Initializing NVIDIA LLM...")
+    return ChatOpenAI(
+        model=os.getenv("NVIDIA_MODEL", "meta/llama-3.3-70b-instruct"),
+        api_key=nvidia_key,
+        base_url=os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1"),
+        temperature=0.1,
+        max_retries=2
+    )
 
