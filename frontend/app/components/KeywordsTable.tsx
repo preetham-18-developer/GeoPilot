@@ -28,7 +28,7 @@ export function KeywordsTable({ projectId, userId }: KeywordsTableProps) {
     setLoading(true);
     fetch(
       `${API_BASE}/analysis/keywords/${projectId}` +
-        `?page=${page}&page_size=50&search=${encodeURIComponent(search)}`,
+        `?page=${page}&page_size=10000&search=${encodeURIComponent(search)}`,
       {
         headers: authHeader(userId),
       }
@@ -255,7 +255,7 @@ export function KeywordsTable({ projectId, userId }: KeywordsTableProps) {
       )}
 
       {/* Pagination */}
-      {total > 50 && (
+      {total > 10000 && (
         <div
           style={{
             display: "flex",

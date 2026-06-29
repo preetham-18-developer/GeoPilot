@@ -87,10 +87,19 @@ def get_analysis_keywords(
         
         mapped_keywords = []
         for kw in (resp.data if resp.data else []):
+            kw_type = kw.get("keyword_type", "General") or "General"
+            confidence = kw.get("confidence_score")
+            if confidence is None:
+                confidence = 0.45
+            frequency_val = int(confidence * 100)
+
             mapped_keywords.append({
                 "id": kw["id"],
+                "keyword": kw.get("keyword", ""),
                 "keyword_text": kw.get("keyword", ""),
-                "category": kw.get("keyword_type", "General"),
+                "keyword_type": kw_type.upper(),
+                "category": kw_type,
+                "frequency": frequency_val,
                 "search_intent": kw.get("intent", ""),
                 "clustering_theme": kw.get("cluster", "General"),
                 "priority": kw.get("priority", "Medium"),
@@ -101,6 +110,7 @@ def get_analysis_keywords(
             
         result = {
             "keywords": mapped_keywords,
+            "total": resp.count or 0,
             "total_count": resp.count or 0,
             "page": page,
             "page_size": page_size

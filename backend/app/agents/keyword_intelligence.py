@@ -334,7 +334,7 @@ def run_keyword_intelligence(state: AgentState) -> Dict[str, Any]:
                     
                 new_kw = f"{kw_item['keyword']} {suffix}"
                 new_words = new_kw.split()
-                if len(new_words) <= 5 and new_kw.lower() not in seen_keywords:
+                if len(new_words) <= 8 and new_kw.lower() not in seen_keywords:
                     seen_keywords.add(new_kw.lower())
                     final_expanded.append({
                         "keyword": new_kw,

@@ -324,6 +324,7 @@ class QuestionDiscoveryAgent:
         }
 
 def expand_questions_naturally(seeds: List[Dict[str, Any]], bi: Dict[str, Any], verified_facts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    import random
     expanded = []
     seen = set()
     
@@ -334,53 +335,292 @@ def expand_questions_naturally(seeds: List[Dict[str, Any]], bi: Dict[str, Any], 
     if country.lower() in ["unknown", "not_found", "online"]:
         country = ""
         
-    styles = [
-        lambda q: q,
-        lambda q: f"who recommends {q}" if "recommend" not in q.lower() else q,
-        lambda q: f"how to find {q}" if "how to find" not in q.lower() else q,
-        lambda q: f"best {q}" if not q.lower().startswith("best") and "best" not in q.lower() else q,
-        lambda q: f"recommend a {q}" if "recommend" not in q.lower() else q,
-        lambda q: f"hey siri {q}",
-        lambda q: f"alexa where can i find {q}"
-    ]
+    pre_query = bi.get("pre_query_discovery", {}) or {}
     
-    loc_modifiers = [
-        lambda q: q,
-        lambda q: f"{q} in {city}" if city else q,
-        lambda q: f"{q} {country}" if country else q,
-        lambda q: f"{q} near me"
-    ]
+    # Helper to clean and filter lists
+    def clean_list(lst, fallbacks):
+        res = []
+        for x in (lst or []):
+            s = str(x).strip()
+            if s and s.upper() not in ["NOT_FOUND", "UNKNOWN", "N/A"]:
+                res.append(s)
+        return res if res else fallbacks
+
+    topics = clean_list(pre_query.get("services", []) + bi.get("seed_topics", []), ["career mentorship", "SQL course"])
+    personas = clean_list(list((pre_query.get("buyer_personas", {}) or {}).keys()), ["students", "career switchers"])
+    problems = clean_list(list((pre_query.get("pain_points", {}) or {}).values()), ["getting a tech job", "switching careers"])
     
-    # Seed expansion loop to generate at least 1500 candidate queries
-    for seed in seeds:
-        original_q = seed["question"].strip().rstrip("?").lower()
+    # Dynamic enrichment based on industry / description keywords
+    enriched_topics = list(topics)
+    enriched_personas = list(personas)
+    enriched_problems = list(problems)
+    
+    desc_lower = (bi.get("description") or "").lower()
+    ind_lower = (bi.get("industry") or "").lower()
+    is_career_edtech = any(x in desc_lower or x in ind_lower for x in ["mentor", "career", "student", "placement", "job", "learn", "course", "coach"])
+    
+    if is_career_edtech:
+        extra_topics = ["career guidance", "1-on-1 mentorship", "interview preparation", "job placement support", "resume building", "tech career coach"]
+        extra_personas = ["job seekers", "college graduates", "career switchers", "freshers", "engineering students"]
+        extra_problems = ["lack of career guidance", "rejection in interviews", "resume screening failure", "switching career to tech"]
         
-        for style_fn in styles:
-            for loc_fn in loc_modifiers:
-                q_text = style_fn(original_q)
-                q_text = loc_fn(q_text)
+        for t in extra_topics:
+            if len(enriched_topics) >= 6:
+                break
+            if t not in enriched_topics:
+                enriched_topics.append(t)
                 
-                q_text = q_text.strip().replace("  ", " ")
-                if q_text.startswith(("who", "how", "what", "where", "which", "can", "is", "are", "why")):
-                    if not q_text.endswith("?"):
-                        q_text += "?"
+        for p in extra_personas:
+            if len(enriched_personas) >= 5:
+                break
+            if p not in enriched_personas:
+                enriched_personas.append(p)
                 
-                q_text = q_text[0].upper() + q_text[1:] if q_text else ""
+        for pr in extra_problems:
+            if len(enriched_problems) >= 5:
+                break
+            if pr not in enriched_problems:
+                enriched_problems.append(pr)
+
+    # Extract features/benefits/competitors from verified facts
+    features = []
+    benefits = []
+    competitors = []
+    for fact in verified_facts:
+        ext = fact.get("extracted_facts", {}) or fact
+        cat = ext.get("fact_category", "").lower()
+        val = ext.get("fact_value", "") or fact.get("fact_value", "")
+        if "feature" in cat or "service" in cat:
+            features.append(val)
+        elif "benefit" in cat or "credential" in cat:
+            benefits.append(val)
+        elif "competitor" in cat:
+            competitors.append(val)
+            
+    features = clean_list(features, ["1-on-1 mentorship sessions", "job placement support", "resume review"])
+    benefits = clean_list(benefits, ["accelerating career transition", "cracking tech interviews", "building a strong portfolio"])
+    competitors = clean_list(competitors, ["generic bootcamps", "traditional courses", "unstructured tutorials"])
+    
+    company_name = get_resolved_company_name(bi, "")
+    industry = bi.get("industry", "technology")
+    
+    # The 25 intent dimensions with 4 templates each
+    dimensions = {
+        "Product Queries": [
+            "where can i enroll in {topic} program",
+            "what is the curriculum of the {topic} course",
+            "are there certifications for {topic} programs",
+            "what do the {topic} training modules cover"
+        ],
+        "Service Queries": [
+            "who offers personalized {topic} services",
+            "professional mentoring services for {topic}",
+            "expert consulting guidance on {topic}",
+            "find a provider for {topic} coaching"
+        ],
+        "Feature Queries": [
+            "does the program include {feature}",
+            "how does the {feature} feature work",
+            "platform training that includes {feature}",
+            "benefits of having {feature} during prep"
+        ],
+        "Benefit Queries": [
+            "how can {topic} help me achieve {benefit}",
+            "will studying {topic} lead to {benefit}",
+            "how {topic} course drives {benefit} for careers",
+            "expected {benefit} after completing {topic}"
+        ],
+        "Pricing Queries": [
+            "cost of {topic} certification program",
+            "fees for 1-on-1 {topic} coaching",
+            "pricing structure for the {topic} platform",
+            "is the price of {topic} modules worth it"
+        ],
+        "Review Queries": [
+            "{topic} reviews from past students",
+            "student testimonials for {topic} training",
+            "what are the ratings of the {topic} program",
+            "is the {topic} curriculum highly reviewed"
+        ],
+        "Comparison Queries": [
+            "compare {topic} vs self-study",
+            "difference between online {topic} and bootcamp",
+            "{topic} course compared to other options",
+            "should i do {topic} program or self-learning"
+        ],
+        "Alternative Queries": [
+            "alternatives to generic bootcamps for {topic}",
+            "what else is there besides traditional {topic} courses",
+            "other ways to learn {topic} without college",
+            "non-traditional paths to master {topic}"
+        ],
+        "Competitor Queries": [
+            "how does this program compare to {competitor}",
+            "which is better for job placement: this or {competitor}",
+            "reviews of {topic} platform vs {competitor}",
+            "why choose this {topic} course over {competitor}"
+        ],
+        "Problem Queries": [
+            "how to solve {problem} in career path",
+            "struggling with {problem} help",
+            "who can help me overcome {problem}",
+            "how to handle {problem} during tech transition"
+        ],
+        "Persona Queries": [
+            "is this {topic} path suitable for {persona}",
+            "how can {persona} start learning {topic}",
+            "recommended {topic} mentoring for {persona}",
+            "can {persona} transition into {topic} roles"
+        ],
+        "Industry Queries": [
+            "demand for {topic} specialists in the {industry} industry",
+            "role of {topic} in modern {industry} workflows",
+            "why {industry} companies hire for {topic} skills",
+            "how {topic} is transforming the {industry} sector"
+        ],
+        "FAQ Queries": [
+            "what is the average duration of the {topic} training",
+            "are there prerequisites for {topic} modules",
+            "does this {topic} program require technical experience",
+            "how many hours per week is the {topic} course"
+        ],
+        "Buying Intent Queries": [
+            "how to sign up for {topic} program",
+            "register for {topic} mentorship online",
+            "enroll in the next batch of {topic} classes",
+            "join {topic} platform with placement support"
+        ],
+        "Local Intent Queries": [
+            "best {topic} training near {city}",
+            "where can i study {topic} in {city}",
+            "{topic} coaching classes in {city}",
+            "top local mentors for {topic} near {city}"
+        ],
+        "Educational Queries": [
+            "learn the fundamentals of {topic}",
+            "basic tutorials to understand {topic}",
+            "step-by-step introduction to {topic}",
+            "what do i need to know about {topic} basics"
+        ],
+        "Conversational AI Queries": [
+            "suggest a mentoring platform that helps with {topic}",
+            "which program connects students with {topic} experts",
+            "can you recommend a career guide for {topic}",
+            "where to ask questions about {topic} career transition"
+        ],
+        "Voice Search Queries": [
+            "where is the best {topic} training course",
+            "how do i get a job in {topic} with no experience",
+            "who can help me switch my career to {topic}",
+            "what is the easiest way to learn {topic}"
+        ],
+        "Long-Tail Queries": [
+            "how to switch from non-tech background to {topic} specialist",
+            "best way to find a {topic} mentor from top companies",
+            "structured path to learn {topic} for job placement",
+            "mentorship program that offers resume review and placement support"
+        ],
+        "Recommendation Queries": [
+            "recommend a reliable {topic} mentoring service",
+            "best recommendation for {topic} program",
+            "what is the most recommended platform for {topic}",
+            "suggest a highly recommended {topic} course"
+        ],
+        "Troubleshooting Queries": [
+            "how to fix mistakes in my {topic} resume",
+            "why am i not getting calls for {topic} jobs",
+            "overcoming anxiety during {topic} interview prep",
+            "how to handle failure in {topic} coding tests"
+        ],
+        "Success Story Queries": [
+            "success stories of career switchers to {topic}",
+            "how students cracked top companies in {topic}",
+            "real success stories from the {topic} mentorship",
+            "past graduates placement rate for {topic}"
+        ],
+        "Implementation Queries": [
+            "how to apply {topic} concepts in real projects",
+            "best practices for implementing {topic} at work",
+            "building a portfolio to showcase {topic} skills",
+            "how to implement {topic} tools in workflows"
+        ],
+        "Career Queries": [
+            "career opportunities after learning {topic}",
+            "salary estimate for {topic} developers",
+            "job market outlook for {topic} roles",
+            "what is the career path of a {topic} specialist"
+        ],
+        "Skill Queries": [
+            "essential skills for {topic} jobs",
+            "how to improve my {topic} technical skills",
+            "what programming skills are needed for {topic}",
+            "how to master {topic} for interviews"
+        ]
+    }
+    
+    # Seed expansion loop using the 25 dimensions
+    for dim_name, templates in dimensions.items():
+        for template in templates:
+            for topic in enriched_topics:
+                # Deterministic selection of persona and problem to avoid Cartesian explosion
+                idx = len(dim_name) + len(template) + len(topic)
+                persona = enriched_personas[idx % len(enriched_personas)]
+                problem = enriched_problems[idx % len(enriched_problems)]
+                feature = features[idx % len(features)]
+                benefit = benefits[idx % len(benefits)]
+                comp = competitors[idx % len(competitors)]
                 
-                if q_text and q_text.lower() not in seen:
-                    seen.add(q_text.lower())
+                base_q = template.format(
+                    topic=topic,
+                    feature=feature,
+                    benefit=benefit,
+                    persona=persona,
+                    problem=problem,
+                    competitor=comp,
+                    city=city or "online",
+                    country=country or "online",
+                    industry=industry or "technology",
+                    company_name=company_name
+                )
+                
+                # Generate location variants
+                q_variants = [base_q]
+                
+                # Only add local variations for intent types that make sense
+                is_local_eligible = any(term in dim_name.lower() for term in ["product", "service", "buying", "local", "voice", "recommendation"])
+                if is_local_eligible:
+                    if city and city.lower() != "online" and f"in {city.lower()}" not in base_q.lower() and f"near {city.lower()}" not in base_q.lower():
+                        q_variants.append(f"{base_q} in {city}")
+                    if "near me" not in base_q.lower() and "online" not in base_q.lower():
+                        q_variants.append(f"{base_q} near me")
+                        
+                for q_raw in q_variants:
+                    # Clean spacing
+                    q_text = q_raw.strip().replace("  ", " ")
                     
-                    expanded.append({
-                        "question": q_text,
-                        "question_type": seed["question_type"],
-                        "intent": seed["intent"],
-                        "confidence_score": seed.get("confidence_score", 0.95),
-                        "priority": seed.get("priority", "Medium"),
-                        "recommended_answer": generate_optimal_answer(q_text, verified_facts, bi),
-                        "difficulty_estimate": seed.get("difficulty_estimate", "Medium"),
-                        "opportunity_estimate": seed.get("opportunity_estimate", "Medium")
-                    })
-                    
+                    # Ensure capitalized first letter
+                    if q_text:
+                        q_text = q_text[0].upper() + q_text[1:]
+                        
+                    # Standard question formatting check
+                    if q_text.lower().startswith(("how", "why", "what", "where", "who", "which", "can", "is", "are", "does", "should", "recommend", "suggest")):
+                        if not q_text.endswith("?"):
+                            q_text += "?"
+                            
+                    if q_text and q_text.lower() not in seen:
+                        seen.add(q_text.lower())
+                        
+                        expanded.append({
+                            "question": q_text,
+                            "question_type": dim_name,
+                            "intent": "commercial" if "recommend" in dim_name.lower() or "pricing" in dim_name.lower() or "compare" in dim_name.lower() else "informational",
+                            "confidence_score": 0.95,
+                            "priority": "High" if "recommend" in dim_name.lower() else "Medium",
+                            "recommended_answer": generate_optimal_answer(q_text, verified_facts, bi),
+                            "difficulty_estimate": "Medium",
+                            "opportunity_estimate": "High" if "recommend" in dim_name.lower() else "Medium"
+                        })
+                            
     return expanded
 
 def run_question_discovery(state: AgentState) -> Dict[str, Any]:
