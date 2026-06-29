@@ -12,6 +12,14 @@ export const DEFAULT_PAGE_SIZE = 10;
  * This is the single source of truth for auth headers.
  */
 export function authHeader(userId: string): Record<string, string> {
+  if (typeof window !== 'undefined') {
+    const token = localStorage.getItem('token') || 
+                  localStorage.getItem('access_token') ||
+                  sessionStorage.getItem('token') || '';
+    if (token) {
+      return { Authorization: token.startsWith('Bearer ') ? token : `Bearer ${token}` };
+    }
+  }
   return { Authorization: `Bearer mock-${userId}` };
 }
 

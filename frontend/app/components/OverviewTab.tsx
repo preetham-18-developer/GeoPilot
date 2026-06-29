@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from "react";
 import { RadialGauge, StatCard, ProgressBar, getScoreColor, getScoreLabel } from "./ui/RadialGauge";
 import { EmptyState, SectionHeader } from "./ui/SkeletonLoader";
+import { API_BASE, authHeader } from "../lib/config";
 
 interface OverviewTabProps {
   projectId: string;
@@ -67,11 +68,11 @@ export default function OverviewTab({ projectId, userId, results, latestReport, 
       console.log('[AIVOP] Fetching overview for:', projectId);
       try {
         const response = await fetch(
-          `http://localhost:8000/api/v1/projects/${projectId}/overview`,
+          `${API_BASE}/analysis/results/${projectId}`,
           {
             headers: {
               'Content-Type': 'application/json',
-              'Authorization': `Bearer mock-${userId}`
+              ...authHeader(userId)
             }
           }
         );
@@ -83,14 +84,21 @@ export default function OverviewTab({ projectId, userId, results, latestReport, 
         const data = await response.json();
         console.log('[AIVOP] Overview response:', data);
 
-        // Map response fields to state
-        setLocalGeoScore(data.geo_score ?? 0);
-        setLocalRecommendationProb(data.recommendation_probability ?? 0);
-        setLocalVerifiedFacts(data.verified_facts_count ?? 0);
+        // Map results/ data structure to local state
+        const overallScore = data.ai_visibility_score?.overall_score ?? data.geo_score ?? 0;
+        
+        const simulations = data.recommendation_simulations ?? [];
+        const avgProb = simulations.length > 0
+          ? Math.round(simulations.reduce((s: number, sim: any) => s + (sim.recommendation_probability ?? 0), 0) / simulations.length)
+          : (data.recommendation_probability ?? 0);
+
+        setLocalGeoScore(overallScore);
+        setLocalRecommendationProb(avgProb);
+        setLocalVerifiedFacts(data.verified_facts?.length ?? data.verified_facts_count ?? 0);
         setLocalLlmQueries(data.questions_count ?? 0);
         setLocalKeywordClusters(data.keyword_clusters_count ?? 0);
-        setLocalQaHealth(data.qa_health ?? null);
-        setLocalApprovalStatus(data.approval_status ?? null);
+        setLocalQaHealth(data.qa_report?.qa_score ?? data.qa_health ?? null);
+        setLocalApprovalStatus(data.qa_report?.approval_status ?? data.approval_status ?? null);
         setHasLoadedOverview(true);
 
       } catch (err) {

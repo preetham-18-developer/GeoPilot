@@ -37,12 +37,14 @@ export function QuestionsTable({ projectId, userId }: QuestionsTableProps) {
 
     setLoading(true);
 
-    let url = `${API_BASE}/projects/${projectId}/questions`;
-    url += `?page=${page}&limit=50`;
-    if (search) url += `&search=${encodeURIComponent(search)}`;
-    if (category !== "All") url += `&category=${category}`;
+    const query = new URLSearchParams({
+      page: page.toString(),
+      page_size: "50",
+    });
+    if (search) query.append("search", search);
+    if (category !== "All") query.append("question_type", category);
 
-    fetch(url, {
+    fetch(`${API_BASE}/analysis/questions/${projectId}?${query.toString()}`, {
       headers: authHeader(userId),
     })
       .then((r) => r.json())

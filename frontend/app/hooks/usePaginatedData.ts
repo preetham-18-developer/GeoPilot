@@ -32,7 +32,7 @@ export function useQuestions(userId: string) {
           sort_by: sortBy,
           sort_order: sortOrder,
         });
-        const res = await fetch(`${API_BASE}/projects/${projectId}/questions?${params}`, {
+        const res = await fetch(`${API_BASE}/analysis/questions/${projectId}?${params}`, {
           headers: authHeader(userId),
         });
         if (res.ok) {
@@ -93,14 +93,14 @@ export function useKeywords(userId: string) {
       setKeywordsLoading(true);
       try {
         const params = new URLSearchParams({
-          limit: "10",
+          page_size: "10",
           page: String(page),
           search,
           keyword_type: typeFilter,
           sort_by: sortBy,
           sort_order: sortOrder,
         });
-        const res = await fetch(`${API_BASE}/projects/${projectId}/keywords?${params}`, {
+        const res = await fetch(`${API_BASE}/analysis/keywords/${projectId}?${params}`, {
           headers: authHeader(userId),
         });
         if (res.ok) {

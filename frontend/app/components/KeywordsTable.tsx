@@ -27,8 +27,8 @@ export function KeywordsTable({ projectId, userId }: KeywordsTableProps) {
 
     setLoading(true);
     fetch(
-      `${API_BASE}/projects/${projectId}/keywords` +
-        `?page=${page}&limit=50&search=${encodeURIComponent(search)}`,
+      `${API_BASE}/analysis/keywords/${projectId}` +
+        `?page=${page}&page_size=50&search=${encodeURIComponent(search)}`,
       {
         headers: authHeader(userId),
       }
