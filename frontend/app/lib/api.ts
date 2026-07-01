@@ -20,6 +20,7 @@ export async function apiGet(path: string) {
   const timeout = setTimeout(() => controller.abort(), 30000);
   
   try {
+    console.log(`[AIVOP API] GET Request: ${API_BASE}${path}`);
     const response = await fetch(`${API_BASE}${path}`, {
       signal: controller.signal,
       headers: {
@@ -31,11 +32,13 @@ export async function apiGet(path: string) {
     clearTimeout(timeout);
     
     if (response.status === 401) {
+      console.warn(`[AIVOP API] Unauthorized (401), redirecting to /login`);
       window.location.href = '/login';
       return null;
     }
     
     if (!response.ok) {
+      console.error(`[AIVOP API] GET Failed: ${API_BASE}${path} - Status: ${response.status}`);
       const err = await response.json().catch(() => ({}));
       throw new Error(err.detail || `Error ${response.status}`);
     }
