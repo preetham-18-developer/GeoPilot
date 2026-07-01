@@ -3,7 +3,8 @@
  * All components must import from here — never hardcode API_BASE.
  */
 
-export const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1";
+const rawBase = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+export const API_BASE = rawBase.endsWith("/api/v1") ? rawBase : `${rawBase}/api/v1`;
 export const API_VERSION = "v1";
 export const DEFAULT_PAGE_SIZE = 10;
 

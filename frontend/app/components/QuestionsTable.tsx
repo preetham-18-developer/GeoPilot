@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { API_BASE, authHeader } from "../lib/config";
+import { apiGet, ROUTES } from "../lib/api";
 
 interface Question {
   id?: string;
@@ -22,6 +22,7 @@ export function QuestionsTable({ projectId, userId }: QuestionsTableProps) {
   const [category, setCategory] = useState("All");
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   const CATEGORIES = [
     "All",
@@ -36,29 +37,47 @@ export function QuestionsTable({ projectId, userId }: QuestionsTableProps) {
     if (!projectId) return;
 
     setLoading(true);
+    setError(null);
 
-    const query = new URLSearchParams({
-      page: page.toString(),
+    const params = new URLSearchParams({
+      page: String(page),
       page_size: "50",
+      sort_by: "priority_score",
+      sort_order: "desc",
     });
-    if (search) query.append("search", search);
-    if (category !== "All") query.append("question_type", category);
+    if (search) params.set("search", search);
+    if (category && category !== "All") {
+      params.set("question_type", category);
+    }
 
-    fetch(`${API_BASE}/analysis/questions/${projectId}?${query.toString()}`, {
-      headers: authHeader(userId),
-    })
-      .then((r) => r.json())
+    apiGet(`${ROUTES.questions(projectId)}?${params}`)
       .then((data) => {
-        // Handle mapped array key from projects/questions endpoint
-        setQuestions(data.questions || data.items || []);
-        setTotal(data.total || data.count || 0);
+        if (!data) return;
+
+        // Handle different response shapes
+        const questions = data.questions || data.items || data.data || [];
+        const total = data.total || data.count || data.total_count || questions.length;
+
+        setQuestions(questions);
+        setTotal(total);
         setLoading(false);
       })
       .catch((err) => {
-        console.error("Questions fetch failed:", err);
+        console.error("Questions fetch error:", err);
+        setError(err.message);
         setLoading(false);
       });
-  }, [projectId, userId, page, search, category]);
+  }, [projectId, page, search, category]);
+
+  if (error) return (
+    <div style={{ padding: "40px", textAlign: "center", background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)" }}>
+      <p style={{ color: "#E11D48", fontWeight: 600 }}>Failed to load questions</p>
+      <p style={{ color: "var(--text-muted)", fontSize: "14px", marginBottom: "16px" }}>{error}</p>
+      <button className="btn btn-primary btn-sm" onClick={() => window.location.reload()}>
+        Retry
+      </button>
+    </div>
+  );
 
   const categoryColor = (cat: string) => {
     const colors: Record<string, { bg: string; text: string }> = {

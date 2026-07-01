@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { API_BASE, authHeader } from "../lib/config";
+import { apiGet, ROUTES } from "../lib/api";
 
 interface Keyword {
   id?: string;
@@ -21,26 +21,39 @@ export function KeywordsTable({ projectId, userId }: KeywordsTableProps) {
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!projectId) return;
 
     setLoading(true);
-    fetch(
-      `${API_BASE}/analysis/keywords/${projectId}` +
-        `?page=${page}&page_size=10000&search=${encodeURIComponent(search)}`,
-      {
-        headers: authHeader(userId),
-      }
-    )
-      .then((r) => r.json())
+    setError(null);
+
+    apiGet(`${ROUTES.keywords(projectId)}?page=${page}&page_size=50&search=${encodeURIComponent(search)}`)
       .then((data) => {
-        setKeywords(data.keywords || []);
-        setTotal(data.total || 0);
+        if (!data) return;
+        const keywords = data.keywords || data.items || data.data || [];
+        const total = data.total || data.count || 0;
+        setKeywords(keywords);
+        setTotal(total);
         setLoading(false);
       })
-      .catch(() => setLoading(false));
-  }, [projectId, userId, page, search]);
+      .catch((err) => {
+        console.error("Keywords fetch error:", err);
+        setError(err.message);
+        setLoading(false);
+      });
+  }, [projectId, page, search]);
+
+  if (error) return (
+    <div style={{ padding: "40px", textAlign: "center", background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)" }}>
+      <p style={{ color: "#E11D48", fontWeight: 600 }}>Failed to load keywords</p>
+      <p style={{ color: "var(--text-muted)", fontSize: "14px", marginBottom: "16px" }}>{error}</p>
+      <button className="btn btn-primary btn-sm" onClick={() => window.location.reload()}>
+        Retry
+      </button>
+    </div>
+  );
 
   const exportCSV = (kws: Keyword[]) => {
     const headers = ["Keyword", "Type", "Frequency"];
@@ -255,7 +268,7 @@ export function KeywordsTable({ projectId, userId }: KeywordsTableProps) {
       )}
 
       {/* Pagination */}
-      {total > 10000 && (
+      {total > 50 && (
         <div
           style={{
             display: "flex",

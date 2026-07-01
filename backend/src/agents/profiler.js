@@ -157,6 +157,56 @@ async function runProfiler(projectId, emit) {
     emit(projectId, 'agent:stream', `✓ Pass 2 complete: ${uniqueTopics.length} total seed topics`);
   }
 
+  // Safety checks - NEVER set business_type to "unknown"
+  const INVALID = ['unknown', 'Unknown', '', 'None', 'null', 'N/A', 'Acme Corp'];
+
+  if (INVALID.includes(pass1Result.business_name || '')) {
+    const project = await prisma.project.findUnique({
+      where: { id: projectId }
+    });
+    const website_url = project?.websiteUrl || homepage?.url || "";
+    if (website_url) {
+      try {
+        const { URL } = require('url');
+        const domain = new URL(website_url).hostname;
+        const name = domain.replace('www.', '').split('.')[0];
+        pass1Result.business_name = name.charAt(0).toUpperCase() + name.slice(1);
+      } catch (err) {
+        pass1Result.business_name = "Business";
+      }
+    } else {
+      pass1Result.business_name = "Business";
+    }
+  }
+
+  if (INVALID.includes(pass1Result.business_type || '')) {
+    const text = pass1Text.toLowerCase();
+    if (text.includes('mentor') || text.includes('career') || text.includes('placement')) {
+      pass1Result.business_type = 'Career Mentorship';
+    } else if (text.includes('course') || text.includes('training') || text.includes('learn')) {
+      pass1Result.business_type = 'Education & Training';
+    } else if (text.includes('clinic') || text.includes('dental') || text.includes('doctor')) {
+      pass1Result.business_type = 'Healthcare';
+    } else if (text.includes('restaurant') || text.includes('food') || text.includes('menu')) {
+      pass1Result.business_type = 'Restaurant';
+    } else if (text.includes('shop') || text.includes('store') || text.includes('grocery')) {
+      pass1Result.business_type = 'Retail';
+    } else {
+      pass1Result.business_type = 'Business';
+    }
+  }
+
+  if (!pass1Result.seed_topics || pass1Result.seed_topics.length === 0) {
+    const btype = pass1Result.business_type || 'business';
+    pass1Result.seed_topics = [
+      `${btype} services`,
+      `best ${btype}`,
+      `${btype} near me`,
+      `find ${btype}`,
+      `recommend ${btype}`
+    ];
+  }
+
   // VALIDATE SEED TOPICS
   const validTopics = validateSeedTopics(pass1Result.seed_topics || []);
   pass1Result.seed_topics = validTopics;

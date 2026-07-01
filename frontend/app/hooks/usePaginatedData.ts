@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback } from "react";
-import { API_BASE, authHeader } from "../lib/config";
+import { apiGet, ROUTES } from "../lib/api";
 
 export function useQuestions(userId: string) {
   const [questionsPage, setQuestionsPage] = useState(1);
@@ -32,11 +32,8 @@ export function useQuestions(userId: string) {
           sort_by: sortBy,
           sort_order: sortOrder,
         });
-        const res = await fetch(`${API_BASE}/analysis/questions/${projectId}?${params}`, {
-          headers: authHeader(userId),
-        });
-        if (res.ok) {
-          const data = await res.json();
+        const data = await apiGet(`${ROUTES.questions(projectId)}?${params}`);
+        if (data) {
           setQuestionsData(data.questions ?? []);
           setQuestionsTotalCount(data.total_count ?? 0);
         }
@@ -46,7 +43,7 @@ export function useQuestions(userId: string) {
         setQuestionsLoading(false);
       }
     },
-    [userId]
+    []
   );
 
   const resetQuestions = useCallback(() => {
@@ -100,11 +97,8 @@ export function useKeywords(userId: string) {
           sort_by: sortBy,
           sort_order: sortOrder,
         });
-        const res = await fetch(`${API_BASE}/analysis/keywords/${projectId}?${params}`, {
-          headers: authHeader(userId),
-        });
-        if (res.ok) {
-          const data = await res.json();
+        const data = await apiGet(`${ROUTES.keywords(projectId)}?${params}`);
+        if (data) {
           const rawKeywords = data.keywords ?? [];
           
           // Map to UI-expected format to support both the projects/keywords and old formats
@@ -130,7 +124,7 @@ export function useKeywords(userId: string) {
         setKeywordsLoading(false);
       }
     },
-    [userId]
+    []
   );
 
   const resetKeywords = useCallback(() => {

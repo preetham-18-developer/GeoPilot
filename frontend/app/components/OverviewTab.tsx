@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from "react";
 import { RadialGauge, StatCard, ProgressBar, getScoreColor, getScoreLabel } from "./ui/RadialGauge";
 import { EmptyState, SectionHeader } from "./ui/SkeletonLoader";
-import { API_BASE, authHeader } from "../lib/config";
+import { apiGet, ROUTES } from "../lib/api";
 
 interface OverviewTabProps {
   projectId: string;
@@ -67,21 +67,8 @@ export default function OverviewTab({ projectId, userId, results, latestReport, 
       if (!projectId) return;
       console.log('[AIVOP] Fetching overview for:', projectId);
       try {
-        const response = await fetch(
-          `${API_BASE}/analysis/results/${projectId}`,
-          {
-            headers: {
-              'Content-Type': 'application/json',
-              ...authHeader(userId)
-            }
-          }
-        );
-
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}`);
-        }
-
-        const data = await response.json();
+        const data = await apiGet(ROUTES.results(projectId));
+        if (!data) return;
         console.log('[AIVOP] Overview response:', data);
 
         // Map results/ data structure to local state
@@ -107,7 +94,7 @@ export default function OverviewTab({ projectId, userId, results, latestReport, 
     };
 
     fetchOverview();
-  }, [projectId, userId]);
+  }, [projectId]);
 
   const score = results.ai_visibility_score;
   const geoScore = hasLoadedOverview ? localGeoScore : (score?.overall_score ?? 0);

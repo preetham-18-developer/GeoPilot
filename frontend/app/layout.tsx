@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import KeepAlive from "./components/KeepAlive";
 
 export const metadata: Metadata = {
   title: "AI Visibility Optimization Platform (AIVOP)",
@@ -14,6 +15,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body>
+        <KeepAlive />
         {children}
       </body>
     </html>

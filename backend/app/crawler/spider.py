@@ -143,58 +143,70 @@ class WebsiteSpider:
     async def _render_with_context(self, url: str, context: Any) -> str:
         """
         Renders a URL using a shared Playwright browser context.
-        Uses 'networkidle' wait strategy + scroll trigger for React/Next.js SPAs.
-        Ensures page is properly closed in a finally block to prevent memory leaks.
+        Uses wait-for-selectors and falls back to HTTPX if content is sparse.
         """
         page = None
         try:
             page = await context.new_page()
             try:
-                # Navigate to URL with a generous timeout and try networkidle
-                await page.goto(url, wait_until="networkidle", timeout=45000)
+                await page.goto(url, wait_until="domcontentloaded", timeout=45000)
             except Exception as e:
-                logger.warning(f"Playwright goto networkidle timeout/failed for {url}: {e}, attempting domcontentloaded fallback...")
-                try:
-                    await page.goto(url, wait_until="domcontentloaded", timeout=25000)
-                except Exception as e2:
-                    logger.error(f"Playwright fallback goto failed for {url}: {e2}")
-                    # Continue anyway to capture whatever content has loaded
+                logger.warning(f"Playwright goto failed for {url}: {e}")
 
-            # Wait for React to render - CRITICAL for SPAs
-            await page.wait_for_timeout(3000)
-
-            # Try to wait for actual content to appear
+            # After page.goto():
             try:
-                await page.wait_for_selector(
-                    'main, #root > div > div, .content, article, section',
-                    timeout=8000
-                )
-            except Exception:
-                pass  # Continue even if selector not found
-
-            # Wait a bit more for lazy loading
-            await page.wait_for_timeout(2000)
-
-            # Scroll to bottom to trigger lazy-loaded content
-            try:
-                await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                await page.wait_for_timeout(1500)
-                await page.evaluate("window.scrollTo(0, 0)")
+                await page.wait_for_load_state('networkidle')
             except Exception:
                 pass
+            await page.wait_for_timeout(4000)  # 4 second wait
 
-            # Remove junk elements from DOM before extracting content,
-            # but keep application/ld+json script tags for structured data
-            try:
-                await page.evaluate('''() => {
-                    const junk = document.querySelectorAll(
-                        'nav, footer, script:not([type="application/ld+json"]), style, noscript, header, ' +
-                        '[class*="cookie"], [class*="popup"], [class*="modal"]'
-                    );
-                    junk.forEach(el => el.remove());
-                }''')
-            except Exception as eval_err:
-                logger.warning(f"Error removing junk elements in Playwright: {eval_err}")
+            # Try multiple selectors for React apps
+            selectors = [
+                'main', '#root > div', '#__next > div',
+                '.content', 'article', 'section', 'h1'
+            ]
+            for selector in selectors:
+                try:
+                    await page.wait_for_selector(selector, timeout=3000)
+                    break
+                except:
+                    continue
+
+            await page.wait_for_timeout(2000)  # extra wait
+
+            # Extract content
+            content = await page.evaluate('''() => {
+                const remove = document.querySelectorAll(
+                    "nav,footer,script,style,noscript,header," +
+                    "[class*='cookie'],[class*='popup'],[class*='chat']"
+                );
+                remove.forEach(el => el.remove());
+                
+                return {
+                    text: document.body.innerText
+                           .replace(/\\s+/g, " ").trim(),
+                    wordCount: document.body.innerText
+                                .split(" ").length
+                };
+            }''')
+
+            # Log what we got — critical for debugging
+            print(f"[CRAWLER] {url}: {content['wordCount']} words")
+
+            # If still empty after Playwright, try httpx fallback
+            if content['wordCount'] < 50:
+                print(f"[CRAWLER] Playwright got empty content, trying httpx")
+                import httpx
+                resp = httpx.get(url, timeout=15, 
+                                 headers={'User-Agent': 'Mozilla/5.0 Chrome/120'})
+                from bs4 import BeautifulSoup
+                soup = BeautifulSoup(resp.text, 'html.parser')
+                for tag in soup(['script','style','nav','footer']):
+                    tag.decompose()
+                fallback_text = soup.get_text(separator=' ', strip=True)
+                if len(fallback_text) > content['wordCount']:
+                    content['text'] = fallback_text
+                    return resp.text
 
             html = await page.content()
             return html
