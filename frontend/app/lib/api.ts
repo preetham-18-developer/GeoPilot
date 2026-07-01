@@ -1,5 +1,5 @@
-const rawBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-export const API_BASE = rawBase.endsWith('/api/v1') ? rawBase.slice(0, -7) : rawBase;
+const rawApi = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+export const API_BASE = rawApi.replace(/\/api\/v1\/?$/, '').replace(/\/$/, '');
 
 function getToken(): string {
   if (typeof window === 'undefined') return '';
