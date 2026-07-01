@@ -16,6 +16,9 @@ from app.routers import (
 )
 from supabase import create_client, ClientOptions
 from app.core.supabase import _client_ctx, _global_client
+import logging
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -34,15 +37,32 @@ async def supabase_client_middleware(request: Request, call_next):
         if len(parts) == 2 and parts[0].lower() == "bearer":
             token = parts[1]
             if token.startswith("mock-"):
+                # Mock/demo session: use service_role key to bypass RLS entirely.
+                # App-level .eq("user_id", user_id) checks in each router remain
+                # the real access-control gate for mock requests.
                 mock_user_id = token.replace("mock-", "")
+                service_key = settings.SUPABASE_SERVICE_ROLE_KEY
+                if not service_key:
+                    logger.warning(
+                        "[AUTH] SUPABASE_SERVICE_ROLE_KEY is not set — "
+                        "mock requests will fall back to anon key and may hit RLS errors. "
+                        "Add SUPABASE_SERVICE_ROLE_KEY to backend/.env from the Supabase dashboard."
+                    )
+                    service_key = settings.SUPABASE_KEY
+                    logger.debug("[AUTH] mock-token request → using KEY TYPE: anon (fallback, service_role missing)")
+                else:
+                    logger.debug("[AUTH] mock-token request → using KEY TYPE: service_role (RLS bypassed)")
                 client = create_client(
                     settings.SUPABASE_URL,
-                    settings.SUPABASE_KEY,
+                    service_key,
                     options=ClientOptions(
                         headers={"X-Mock-User": mock_user_id}
                     )
                 )
             else:
+                # Real Supabase JWT: use anon key + forward the JWT so RLS
+                # auth.uid() = user_id policy applies correctly.
+                logger.debug("[AUTH] real JWT request → using KEY TYPE: anon + forwarded JWT (RLS active)")
                 client = create_client(
                     settings.SUPABASE_URL,
                     settings.SUPABASE_KEY,

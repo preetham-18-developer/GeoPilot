@@ -15,6 +15,10 @@ class Settings(BaseSettings):
         "SUPABASE_KEY", 
         "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Induam5lYnF3Z3JqZnNtYmtnaXVhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk3MTQwMzksImV4cCI6MjA5NTI5MDAzOX0.T60uDBZGi2xXl4HONMnU9VNqfpFLuv7f_E50wRyM2Wg"
     )
+    # Service role key — bypasses RLS entirely; used for mock/demo token requests.
+    # Set SUPABASE_SERVICE_ROLE_KEY in backend/.env from:
+    # Supabase Dashboard → Project Settings → API → service_role key
+    SUPABASE_SERVICE_ROLE_KEY: str = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
     
     # LLM keys
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
