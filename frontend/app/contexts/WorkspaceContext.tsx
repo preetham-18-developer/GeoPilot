@@ -59,8 +59,11 @@ export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
 
   // Re-fetch projects whenever userId changes
   useEffect(() => {
+    if (typeof window !== "undefined") {
+      localStorage.setItem("userId", userId);
+    }
     fetchProjects();
-  }, [fetchProjects]);
+  }, [fetchProjects, userId]);
 
   const createProject = useCallback(
     async (name: string, url: string): Promise<Project | null> => {

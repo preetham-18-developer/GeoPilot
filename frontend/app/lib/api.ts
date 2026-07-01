@@ -13,6 +13,8 @@ function getToken(): string {
 
 export async function apiGet(path: string) {
   const token = getToken();
+  const userId = typeof window !== 'undefined' ? (localStorage.getItem('userId') || '00000000-0000-4000-a000-000000000001') : '';
+  const authVal = token ? `Bearer ${token}` : (userId ? `Bearer mock-${userId}` : '');
   
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30000);
@@ -22,7 +24,7 @@ export async function apiGet(path: string) {
       signal: controller.signal,
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': token ? `Bearer ${token}` : ''
+        'Authorization': authVal
       }
     });
     
