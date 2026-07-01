@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 class Settings(BaseSettings):
-    PROJECT_NAME: str = "AI Visibility Optimization Platform (AIVOP)"
+    PROJECT_NAME: str = "AI Recommendation System"
     VERSION: str = "1.0.0"
     API_V1_STR: str = "/api/v1"
     

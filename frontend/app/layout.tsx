@@ -3,7 +3,7 @@ import "./globals.css";
 import KeepAlive from "./components/KeepAlive";
 
 export const metadata: Metadata = {
-  title: "AI Visibility Optimization Platform (AIVOP)",
+  title: "AI Recommendation System",
   description: "Identify and optimize your brand discoverability inside modern AI recommendation systems like ChatGPT, Gemini, and Claude.",
 };
 
