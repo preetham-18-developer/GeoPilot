@@ -1,4 +1,4 @@
-from fastapi import Header, HTTPException, Depends
+from fastapi import Header, HTTPException
 from app.core.supabase import supabase_client
 import logging
 
@@ -9,19 +9,29 @@ def _ensure_user_exists(user_id: str, email: str = "") -> None:
     """
     Upsert a row in public.users so every authenticated user always has
     a profile record before any project FK write is attempted.
-    Uses on_conflict="id" so it's a true no-op if the row already exists.
+
+    MUST use the service-role client so the auth.users → public.users FK
+    chain is bypassed for mock/demo tokens whose UUIDs only exist in
+    public.users but not in auth.users.
     """
     try:
-        supabase_client.table("users").upsert(
+        from app.core.config import settings
+        from supabase import create_client
+
+        # Prefer service_role key (bypasses RLS + auth.users FK for public.users)
+        key = settings.SUPABASE_SERVICE_ROLE_KEY or settings.SUPABASE_KEY
+        admin_client = create_client(settings.SUPABASE_URL, key)
+
+        admin_client.table("users").upsert(
             {
                 "id": user_id,
                 "email": email or f"{user_id[:8]}@aivop.app",
             },
             on_conflict="id",
         ).execute()
+        logger.debug(f"[AUTH] ensure_user_exists OK: {user_id}")
     except Exception as e:
-        # Non-fatal — log a warning and continue. The FK will surface a real
-        # error if the upsert actually failed for a data-integrity reason.
+        # Non-fatal — log a warning and continue.
         logger.warning(f"[AUTH] ensure_user_exists({user_id}) warning: {e}")
 
 

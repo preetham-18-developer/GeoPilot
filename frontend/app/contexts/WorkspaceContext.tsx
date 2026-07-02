@@ -28,10 +28,21 @@ const WorkspaceContext = createContext<WorkspaceContextValue | null>(null);
 
 export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
   const [userId, setUserIdState] = useState<string>(() => {
-    // Read persisted user ID from localStorage (set on login or user-switch).
-    // Falls back to DEFAULT_USER_ID (the real Supabase auth UID).
     if (typeof window !== 'undefined') {
-      return localStorage.getItem('userId') || DEFAULT_USER_ID;
+      const stored = localStorage.getItem('userId');
+      // Migrate away from old fake/demo UUIDs that don't exist in auth.users.
+      // Any stored ID that isn't a real Supabase UID must be discarded.
+      const LEGACY_FAKE_IDS = [
+        '00000000-0000-4000-a000-000000000001',
+        '00000000-0000-4000-a000-000000000002',
+        '00000000-0000-4000-a000-000000000003',
+      ];
+      if (stored && LEGACY_FAKE_IDS.includes(stored)) {
+        // Replace stale fake ID with the real Supabase auth UID
+        localStorage.setItem('userId', DEFAULT_USER_ID);
+        return DEFAULT_USER_ID;
+      }
+      return stored || DEFAULT_USER_ID;
     }
     return DEFAULT_USER_ID;
   });
