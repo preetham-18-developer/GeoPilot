@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
+from app.core.dependencies import _ensure_user_exists
 from app.routers import (
     projects,
     analysis_results,
@@ -59,6 +60,8 @@ async def supabase_client_middleware(request: Request, call_next):
                         headers={"X-Mock-User": mock_user_id}
                     )
                 )
+                # Guarantee public.users row exists before any router DB write
+                _ensure_user_exists(mock_user_id)
             else:
                 # Real Supabase JWT: use anon key + forward the JWT so RLS
                 # auth.uid() = user_id policy applies correctly.

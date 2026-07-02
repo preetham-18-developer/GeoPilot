@@ -1,13 +1,13 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { apiGet, ROUTES } from "../lib/api";
+import { API_BASE } from "../lib/api";
 
 interface Keyword {
   id?: string;
   keyword: string;
-  keyword_type: string;
-  frequency: number;
+  keyword_type?: string;
+  frequency?: number;
 }
 
 interface KeywordsTableProps {
@@ -15,49 +15,133 @@ interface KeywordsTableProps {
   userId: string;
 }
 
+const PAGE_SIZE = 50;
+
+function getToken(): string {
+  if (typeof window === "undefined") return "";
+  return (
+    localStorage.getItem("token") ||
+    localStorage.getItem("access_token") ||
+    sessionStorage.getItem("token") ||
+    ""
+  );
+}
+
 export function KeywordsTable({ projectId, userId }: KeywordsTableProps) {
   const [keywords, setKeywords] = useState<Keyword[]>([]);
   const [total, setTotal] = useState(0);
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!projectId) return;
+    if (!projectId) {
+      console.warn("[KeywordsTable] No projectId provided — skipping fetch");
+      return;
+    }
 
-    setLoading(true);
-    setError(null);
+    const fetchKeywords = async () => {
+      setLoading(true);
+      setError(null);
 
-    apiGet(`${ROUTES.keywords(projectId)}?page=${page}&page_size=50&search=${encodeURIComponent(search)}`)
-      .then((data) => {
-        if (!data) return;
-        const keywords = data.keywords || data.items || data.data || [];
-        const total = data.total || data.count || 0;
-        setKeywords(keywords);
-        setTotal(total);
-        setLoading(false);
-      })
-      .catch((err) => {
-        console.error("Keywords fetch error:", err);
-        setError(err.message);
-        setLoading(false);
+      const token = getToken();
+
+      const params = new URLSearchParams({
+        page: String(page),
+        page_size: String(PAGE_SIZE),
       });
+      if (search) params.set("search", search);
+
+      // === DEBUG LOGS — remove after confirming working ===
+      console.log("=== KEYWORDS FETCH DEBUG ===");
+      console.log("Project ID:", projectId);
+      console.log("Token:", token ? token.slice(0, 20) + "..." : "MISSING ⚠️");
+      console.log("API Base:", API_BASE);
+      // =====================================================
+
+      // Try both URL patterns; whichever returns 200 wins
+      const urls = [
+        `${API_BASE}/api/v1/projects/${projectId}/keywords?${params}`,
+        `${API_BASE}/api/v1/analysis/keywords/${projectId}?${params}`,
+      ];
+
+      let lastError = "";
+
+      for (const url of urls) {
+        try {
+          console.log("[Keywords] Trying:", url);
+
+          const response = await fetch(url, {
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: token ? `Bearer ${token}` : "",
+            },
+          });
+
+          console.log("[Keywords] Status:", response.status);
+
+          // Auto-logout on expired session
+          if (response.status === 401) {
+            console.warn("[Keywords] 401 — session expired, redirecting to /login");
+            localStorage.removeItem("token");
+            localStorage.removeItem("access_token");
+            window.location.href = "/login";
+            return;
+          }
+
+          if (response.ok) {
+            const data = await response.json();
+            console.log("[Keywords] Data keys:", Object.keys(data));
+
+            const items: Keyword[] =
+              data.keywords || data.items || data.data || data.results || [];
+            const count: number =
+              data.total ?? data.count ?? data.total_count ?? items.length;
+
+            setKeywords(items);
+            setTotal(count);
+            setLoading(false);
+            return; // success — stop trying
+          }
+
+          lastError = `HTTP ${response.status} from ${url}`;
+          console.warn("[Keywords] Non-OK status:", response.status, "— trying next URL");
+        } catch (err: any) {
+          lastError = err.message;
+          console.error("[Keywords] Fetch error:", err.message);
+        }
+      }
+
+      // Both URLs failed
+      setError(`Failed to load keywords: ${lastError}`);
+      setLoading(false);
+    };
+
+    fetchKeywords();
   }, [projectId, page, search]);
 
-  if (error) return (
-    <div style={{ padding: "40px", textAlign: "center", background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)" }}>
-      <p style={{ color: "#E11D48", fontWeight: 600 }}>Failed to load keywords</p>
-      <p style={{ color: "var(--text-muted)", fontSize: "14px", marginBottom: "16px" }}>{error}</p>
-      <button className="btn btn-primary btn-sm" onClick={() => window.location.reload()}>
-        Retry
-      </button>
-    </div>
-  );
+  // ── No project guard ──────────────────────────────────────────────────────
+  if (!projectId) {
+    return (
+      <div
+        style={{
+          padding: "40px",
+          textAlign: "center",
+          color: "var(--text-muted)",
+          background: "var(--bg-card)",
+          border: "1px solid var(--border)",
+          borderRadius: "var(--radius-lg)",
+        }}
+      >
+        Select a project to view keywords.
+      </div>
+    );
+  }
 
-  const exportCSV = (kws: Keyword[]) => {
+  const exportCSV = () => {
     const headers = ["Keyword", "Type", "Frequency"];
-    const rows = kws.map((kw) => [
+    const rows = keywords.map((kw) => [
       kw.keyword || "",
       kw.keyword_type || "KEYWORD",
       kw.frequency !== undefined ? kw.frequency : "",
@@ -70,17 +154,24 @@ export function KeywordsTable({ projectId, userId }: KeywordsTableProps) {
           e.map((val) => `"${String(val).replace(/"/g, '""')}"`).join(",")
         ),
       ].join("\n");
-    const encodedUri = encodeURI(csvContent);
     const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `keywords_project_${projectId}_${Date.now()}.csv`);
+    link.href = encodeURI(csvContent);
+    link.download = `keywords_project_${projectId}_${Date.now()}.csv`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
   };
 
   return (
-    <div className="card animate-fade-in" style={{ padding: "24px", background: "var(--bg-card)", border: "1px solid var(--border)", borderRadius: "var(--radius-lg)" }}>
+    <div
+      className="card animate-fade-in"
+      style={{
+        padding: "24px",
+        background: "var(--bg-card)",
+        border: "1px solid var(--border)",
+        borderRadius: "var(--radius-lg)",
+      }}
+    >
       {/* Header */}
       <div
         style={{
@@ -103,8 +194,20 @@ export function KeywordsTable({ projectId, userId }: KeywordsTableProps) {
             ({total.toLocaleString()} total)
           </span>
         </h2>
-        <button className="btn btn-secondary btn-sm" onClick={() => exportCSV(keywords)} disabled={keywords.length === 0}>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ marginRight: "4px" }}>
+        <button
+          className="btn btn-secondary btn-sm"
+          onClick={exportCSV}
+          disabled={keywords.length === 0}
+        >
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            style={{ marginRight: "4px" }}
+          >
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
           </svg>
           Export CSV
@@ -128,37 +231,57 @@ export function KeywordsTable({ projectId, userId }: KeywordsTableProps) {
         <input
           placeholder="Search keywords..."
           value={search}
-          onChange={(e) => {
-            setSearch(e.target.value);
-            setPage(1);
-          }}
+          onChange={(e) => { setSearch(e.target.value); setPage(1); }}
           className="form-input"
-          style={{
-            width: "100%",
-            paddingLeft: "2.25rem",
-            boxSizing: "border-box",
-          }}
+          style={{ width: "100%", paddingLeft: "2.25rem", boxSizing: "border-box" }}
         />
       </div>
 
-      {/* Simple Table */}
-      {loading ? (
+      {/* States */}
+      {loading && (
         <div style={{ padding: "40px", textAlign: "center", color: "var(--text-muted)" }}>
           Loading keywords...
         </div>
-      ) : keywords.length === 0 ? (
-        <div style={{ padding: "40px", textAlign: "center", color: "var(--text-muted)" }}>
-          No keywords found for this filter.
-        </div>
-      ) : (
-        <div style={{ overflowX: "auto" }}>
-          <table
-            style={{
-              width: "100%",
-              borderCollapse: "collapse",
-              fontSize: "14px",
-            }}
+      )}
+
+      {error && (
+        <div
+          style={{
+            padding: "20px",
+            background: "#FFF1F2",
+            border: "1px solid #FECDD3",
+            borderRadius: "8px",
+            marginBottom: "16px",
+          }}
+        >
+          <p style={{ color: "#E11D48", margin: 0, fontWeight: 600 }}>
+            Failed to load keywords
+          </p>
+          <p style={{ color: "var(--text-muted)", fontSize: "14px", marginBottom: "12px" }}>
+            {error}
+          </p>
+          <button
+            className="btn btn-primary btn-sm"
+            onClick={() => setPage((p) => p)}
           >
+            Retry
+          </button>
+        </div>
+      )}
+
+      {!loading && !error && keywords.length === 0 && (
+        <div style={{ padding: "40px", textAlign: "center", color: "var(--text-muted)" }}>
+          <p style={{ fontSize: "16px", marginBottom: "8px" }}>No keywords found</p>
+          <p style={{ fontSize: "13px" }}>
+            Run an analysis to discover keywords for this project.
+          </p>
+        </div>
+      )}
+
+      {/* Table */}
+      {!loading && keywords.length > 0 && (
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "14px" }}>
             <thead>
               <tr
                 style={{
@@ -268,7 +391,7 @@ export function KeywordsTable({ projectId, userId }: KeywordsTableProps) {
       )}
 
       {/* Pagination */}
-      {total > 50 && (
+      {total > PAGE_SIZE && (
         <div
           style={{
             display: "flex",
@@ -280,7 +403,8 @@ export function KeywordsTable({ projectId, userId }: KeywordsTableProps) {
           }}
         >
           <span>
-            Showing {((page - 1) * 50 + 1)}-{Math.min(page * 50, total)} of {total.toLocaleString()}
+            Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, total)} of{" "}
+            {total.toLocaleString()}
           </span>
           <div style={{ display: "flex", gap: "8px" }}>
             <button
@@ -299,12 +423,12 @@ export function KeywordsTable({ projectId, userId }: KeywordsTableProps) {
                 fontSize: "0.875rem",
               }}
             >
-              Page {page} of {Math.ceil(total / 50)}
+              Page {page} of {Math.ceil(total / PAGE_SIZE)}
             </span>
             <button
               className="btn btn-secondary btn-sm"
               onClick={() => setPage((p) => p + 1)}
-              disabled={page * 50 >= total}
+              disabled={page * PAGE_SIZE >= total}
             >
               Next →
             </button>

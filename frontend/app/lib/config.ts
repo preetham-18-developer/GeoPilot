@@ -103,9 +103,13 @@ export const ETA_MAP: Record<string, string> = {
   compiling: "10s",
 };
 
-/** Default demo users for the workspace switcher */
+/** Default demo users for the workspace switcher.
+ * IMPORTANT: The primary user ID MUST match the real Supabase auth.users UID
+ * so that project FK constraints are satisfied. Update this whenever the
+ * Supabase account changes.
+ */
 export const DEMO_USERS = [
-  { id: "00000000-0000-4000-a000-000000000001", label: "Preetham (User 1)" },
+  { id: "f0a29fd8-dc5b-4724-9099-e7e384747daa", label: "Preetham (preethamgoud2006@gmail.com)" },
   { id: "00000000-0000-4000-a000-000000000002", label: "David Miller (User 2)" },
   { id: "00000000-0000-4000-a000-000000000003", label: "Sarah Connor (User 3)" },
 ] as const;

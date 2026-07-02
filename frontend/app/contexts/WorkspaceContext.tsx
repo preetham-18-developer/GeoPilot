@@ -27,7 +27,14 @@ interface WorkspaceContextValue {
 const WorkspaceContext = createContext<WorkspaceContextValue | null>(null);
 
 export function WorkspaceProvider({ children }: { children: React.ReactNode }) {
-  const [userId, setUserIdState] = useState<string>(DEFAULT_USER_ID);
+  const [userId, setUserIdState] = useState<string>(() => {
+    // Read persisted user ID from localStorage (set on login or user-switch).
+    // Falls back to DEFAULT_USER_ID (the real Supabase auth UID).
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('userId') || DEFAULT_USER_ID;
+    }
+    return DEFAULT_USER_ID;
+  });
   const [projects, setProjects] = useState<Project[]>([]);
   const [projectsLoading, setProjectsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
