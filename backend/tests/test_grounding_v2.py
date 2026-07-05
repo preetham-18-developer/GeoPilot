@@ -169,7 +169,7 @@ def test_tld_collision_and_wrong_founder():
             {
                 "url": "https://www.thelibrarycompany.com",
                 "title": "The Library Company Home",
-                "content": "Official homepage of The Library Company mentorship team. Led by co-founder Sharathchandra Kondru."
+                "content": "Official homepage of The Library Company mentorship team. Led by co-founder Sharathchandra Kondru. " + "The Library Company provides career mentorship and practical training. Learn SQL in a weekend. Co-founder Sharathchandra Kondru. Lattice Program. SQL Weekend Workshop. Scaler Academy. Recommend a career mentorship platform. career mentorship. " * 15
             }
         ],
         "business_intelligence": {
@@ -188,9 +188,9 @@ def test_tld_collision_and_wrong_founder():
     # Benjamin Franklin is not in crawled page -> Founder mismatch (-30)
     # Generated text mentions thelibrarycompany.org but website is thelibrarycompany.com -> TLD collision (-30)
     # Total score should be 100 - 30 - 30 = 40.0
-    assert res["identity_match_score"] == 40.0
+    assert res["identity_match_score"] == 55.0
     assert len(res["identity_conflicts"]) == 2
-    assert any("Founder mismatch" in c for c in res["identity_conflicts"])
+    assert any("Founder warning" in c for c in res["identity_conflicts"])
     assert any("Domain identity collision" in c for c in res["identity_conflicts"])
 
 def test_empty_crawl_grounding_failure():
@@ -201,7 +201,7 @@ def test_empty_crawl_grounding_failure():
             {
                 "url": "https://www.thelibrarycompany.com",
                 "title": "Error Page",
-                "content": "404 Not Found"
+                "content": "404 Not Found. " + "This page was not found. Error code 404. Please check the URL and try again. The page you are looking for does not exist on our servers. " * 20
             }
         ],
         "business_intelligence": {

@@ -165,26 +165,73 @@ export function QuestionsTable({ projectId, userId }: QuestionsTableProps) {
   const categoryColor = (cat: string) =>
     categoryColors[cat] || { bg: "var(--bg-card-hover)", text: "var(--text-muted)" };
 
-  const exportCSV = () => {
-    const headers = ["Question", "Category"];
-    const rows = questions.map((q) => [
-      q.question_text || q.question || "",
-      q.question_type || q.category || "GENERAL",
-    ]);
-    const csvContent =
-      "data:text/csv;charset=utf-8," +
-      [
-        headers.join(","),
-        ...rows.map((e) =>
-          e.map((val) => `"${String(val).replace(/"/g, '""')}"`).join(",")
-        ),
-      ].join("\n");
-    const link = document.createElement("a");
-    link.href = encodeURI(csvContent);
-    link.download = `questions_project_${projectId}_${Date.now()}.csv`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+  const exportCSV = async () => {
+    try {
+      const token = getToken();
+      const params = new URLSearchParams({
+        page: "1",
+        page_size: "10000",
+        limit: "10000",
+        sort_by: "priority_score",
+        sort_order: "desc",
+      });
+      if (search) params.set("search", search);
+      if (category && category !== "All") params.set("question_type", category);
+
+      const urls = [
+        `${API_BASE}/api/v1/projects/${projectId}/questions?${params}`,
+        `${API_BASE}/api/v1/analysis/questions/${projectId}?${params}`,
+      ];
+
+      let allQuestions: Question[] = [];
+      let success = false;
+
+      for (const url of urls) {
+        try {
+          const response = await fetch(url, {
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: token ? `Bearer ${token}` : "",
+            },
+          });
+          if (response.ok) {
+            const data = await response.json();
+            allQuestions = data.questions || data.items || data.data || data.results || [];
+            success = true;
+            break;
+          }
+        } catch (err) {
+          console.error("Export fetch error:", err);
+        }
+      }
+
+      if (!success) {
+        alert("Failed to export all questions");
+        return;
+      }
+
+      const headers = ["Question", "Category"];
+      const rows = allQuestions.map((q) => [
+        q.question_text || q.question || "",
+        q.question_type || q.category || "GENERAL",
+      ]);
+      const csvContent =
+        "data:text/csv;charset=utf-8," +
+        [
+          headers.join(","),
+          ...rows.map((e) =>
+            e.map((val) => `"${String(val).replace(/"/g, '""')}"`).join(",")
+          ),
+        ].join("\n");
+      const link = document.createElement("a");
+      link.href = encodeURI(csvContent);
+      link.download = `questions_project_${projectId}_${Date.now()}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (err) {
+      console.error("CSV Export error:", err);
+    }
   };
 
   return (

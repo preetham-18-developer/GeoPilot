@@ -319,6 +319,15 @@ class FallbackMockLLM:
         # Keep founders empty if none detected from content.
         founders = list(dict.fromkeys([f for f in founders if f]))  # deduplicate, no-empty
             
+        seed_topics = [
+            "sql weekend batch classes",
+            "1 on 1 career mentorship",
+            "product manager career switch",
+            "women returning to tech program",
+            "placement support engineering students",
+            "tech career guidance freshers"
+        ]
+
         bi_data = {
             "company_name": company_name,
             "industry": industry,
@@ -334,8 +343,9 @@ class FallbackMockLLM:
             "trust_signals": ["Verified team credentials from top companies"],
             "business_model": "SaaS / Mentorship-driven",
             "ai_visibility_opportunities": ["Inject structured JSON-LD schemas"],
+            "seed_topics": seed_topics,
             "pre_query_discovery": {
-                "industry_topics": ["Professional growth", "Skills validation"],
+                "industry_topics": seed_topics,
                 "industry_terminology": ["Lattice Program", "Placement Drive"],
                 "products": products,
                 "services": services,
@@ -762,8 +772,31 @@ class FallbackMockLLM:
             "trust_signals": ["99% Placement and Career Success Rate", "Team members employed at Fortune 500 companies", "Over 15,000 students counselled and 500+ mentored"],
             "business_model": "Mentorship-driven EdTech with free live sessions and premium program tiers",
             "ai_visibility_opportunities": ["Inject Course and Organization structured schema", "Create an FAQ page answering career-transition queries"],
+            "seed_topics": [
+                "sql weekend batch classes",
+                "1 on 1 career mentorship",
+                "product manager career switch",
+                "women returning to tech program",
+                "placement support engineering students",
+                "tech career guidance freshers",
+                "industry mentors from top companies",
+                "relaunchher women tech program",
+                "sql training with job placement",
+                "career change into technology"
+            ],
             "pre_query_discovery": {
-                "industry_topics": ["Career Transition", "Tech Mentorship", "SQL Training", "AI Application Architecture"],
+                "industry_topics": [
+                    "sql weekend batch classes",
+                    "1 on 1 career mentorship",
+                    "product manager career switch",
+                    "women returning to tech program",
+                    "placement support engineering students",
+                    "tech career guidance freshers",
+                    "industry mentors from top companies",
+                    "relaunchher women tech program",
+                    "sql training with job placement",
+                    "career change into technology"
+                ],
                 "industry_terminology": ["Mentorship Program", "WebGL Simulation", "WebGL", "Placement Drive", "Lattice Program"],
                 "products": ["ReLaunchHER Program", "Lattice Program"],
                 "services": ["Personalized Mentorship", "Master SQL in a Weekend Workshop", "Build Your Own AI Assistant Workshop"],

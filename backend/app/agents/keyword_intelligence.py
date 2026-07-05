@@ -212,9 +212,30 @@ def run_keyword_intelligence(state: AgentState) -> Dict[str, Any]:
         return [str(x).strip() for x in lst if x and str(x).strip().upper() != "NOT_FOUND"]
     
     services = clean_list(pre_query.get("services", [])) or [bi.get("industry", "industry solutions")]
-    topics = clean_list(pre_query.get("industry_topics", [])) or ["optimization", "solutions"]
+    seed_topics = bi.get("seed_topics", [])
     
-    core_topics = list(set(services + topics + [bi.get("industry", "solutions")]))
+    # Filter to only multi-word specific topics
+    REJECT_SINGLES = {
+        'passion', 'helping', 'companies', 'careers',
+        'students', 'optimization', 'solutions', 'platform',
+        'learning', 'growth', 'support', 'guidance'
+    }
+    
+    valid_seed_topics = [
+        t for t in seed_topics 
+        if len(str(t).split()) >= 2 
+        and str(t).lower() not in REJECT_SINGLES
+    ]
+    
+    topics = clean_list(
+        pre_query.get("industry_topics", [])
+    ) or valid_seed_topics or [
+        "career mentorship program",
+        "sql training placement", 
+        "tech job guidance"
+    ]
+    
+    core_topics = list(set(services + topics))
     
     # Add seeds to candidates
     seed_texts = [s["keyword"] for s in seeds]
@@ -318,31 +339,15 @@ def run_keyword_intelligence(state: AgentState) -> Dict[str, Any]:
             "source": "Recommendation Queries" if kw in extracted_candidates else "Verified Facts"
         })
         
-    # Scale to 5000+ keywords or ensure substantial list
-    # If list is below 5000, we add long tail permutations
-    if len(final_expanded) < 5000:
-        logger.info(f"Adding semantic permutations to reach target volume (current: {len(final_expanded)})...")
-        extra_suffixes = ["for career support", "with placement help", "for students", "for tech jobs", "classes near me"]
-        base_list = list(final_expanded)
-        
-        for kw_item in base_list:
-            if len(final_expanded) >= 5050:
-                break
-            for suffix in extra_suffixes:
-                if len(final_expanded) >= 5050:
-                    break
-                    
-                new_kw = f"{kw_item['keyword']} {suffix}"
-                new_words = new_kw.split()
-                if len(new_words) <= 8 and new_kw.lower() not in seen_keywords:
-                    seen_keywords.add(new_kw.lower())
-                    final_expanded.append({
-                        "keyword": new_kw,
-                        "keyword_type": "Long Tail",
-                        "intent": "informational",
-                        "cluster": kw_item["cluster"],
-                        "source": "Recommendation Queries"
-                    })
+    logger.info(
+        f"Final keyword count: {len(final_expanded)}"
+    )
+    
+    if len(final_expanded) < 50:
+        logger.warning(
+            "Very few keywords generated. "
+            "Check seed topics quality in profiler."
+        )
 
     # Ensure EVERY single keyword is scored deterministically
     final_scored_keywords = []

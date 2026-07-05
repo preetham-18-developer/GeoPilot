@@ -389,7 +389,7 @@ async def get_project_overview(
 async def get_project_keywords(
     project_id: str,
     page: int = 1,
-    limit: int = 10,
+    limit: int = 10000,
     category: Optional[str] = None,
     keyword_type: Optional[str] = None,
     search: Optional[str] = None,
@@ -483,7 +483,7 @@ async def get_project_keywords(
 async def get_project_questions(
     project_id: str,
     page: int = 1,
-    limit: int = 10,
+    limit: int = 10000,
     category: Optional[str] = None,
     question_type: Optional[str] = None,
     search: Optional[str] = None,

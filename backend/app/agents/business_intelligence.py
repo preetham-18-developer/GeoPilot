@@ -51,6 +51,22 @@ def validate_and_clean_profile(profile: dict, url: str, crawled_content: str) ->
         profile['business_type'] = current_type
         profile['industry'] = current_type
         
+    # Validate and clean seed topics
+    if isinstance(profile.get('seed_topics'), list):
+        cleaned_topics = []
+        for t in profile['seed_topics']:
+            if not isinstance(t, str):
+                continue
+            t_clean = t.strip()
+            # Rules: 2 words minimum, exclude the generic words
+            words = t_clean.lower().split()
+            if len(words) < 2:
+                continue
+            if any(bad in words for bad in ['passion', 'helping', 'companies', 'students', 'careers']):
+                continue
+            cleaned_topics.append(t_clean)
+        profile['seed_topics'] = cleaned_topics
+
     # If seed_topics is empty, create basic ones from content
     if not profile.get('seed_topics') or not isinstance(profile.get('seed_topics'), list) or len(profile.get('seed_topics')) == 0:
         if 'pre_query_discovery' in profile and isinstance(profile['pre_query_discovery'], dict) and profile['pre_query_discovery'].get('industry_topics'):
@@ -71,7 +87,7 @@ def validate_and_clean_profile(profile: dict, url: str, crawled_content: str) ->
             from collections import Counter
             freq = Counter(meaningful)
             top_words = [word for word, count in freq.most_common(20) if count > 1]
-            profile['seed_topics'] = top_words[:15]
+            profile['seed_topics'] = [w for w in top_words[:15] if w not in ['passion', 'helping', 'companies', 'students', 'careers']]
             
     # Normalize pre_query_discovery topics
     if 'pre_query_discovery' not in profile or not isinstance(profile['pre_query_discovery'], dict):
@@ -113,7 +129,30 @@ Your analysis must output:
 12. trust_signals: An array of verified trust signals, certifications, security standards, reviews, or awards found in the facts.
 13. business_model: Detected business model (e.g. SaaS, Subscription, Free service, eCommerce, B2B, B2C, Non-profit).
 14. ai_visibility_opportunities: An array of specific opportunities to increase visibility in AI search engines.
-15. pre_query_discovery: A nested JSON object containing:
+15. seed_topics: Extract seed_topics as SPECIFIC SEARCHABLE PHRASES.
+    Rules:
+    1. Each topic must be 2-5 words minimum
+    2. Must be something a real person searches on Google
+    3. Must relate to a specific service, course, or program
+    4. NEVER extract single generic words
+    5. NEVER extract: passion, helping, companies, students, careers
+       These are too generic — exclude them
+
+    For thelibrarycompany.com the correct topics are:
+    - sql weekend batch classes
+    - 1 on 1 career mentorship
+    - product manager career switch
+    - women returning to tech program
+    - placement support engineering students
+    - tech career guidance freshers
+    - industry mentors from top companies
+    - relaunchher women tech program
+    - sql training with job placement
+    - career change into technology
+
+    Extract 15-40 topics like these from the website content.
+    Return as JSON array of strings.
+16. pre_query_discovery: A nested JSON object containing:
     - industry_topics: An array of key topics related to the industry.
     - industry_terminology: An array of specialized industry terms/jargon.
     - products: An array of specific product offerings.
@@ -168,6 +207,12 @@ Format your response as a valid JSON object. Do not wrap it in markdown code blo
   "trust_signals": ["ISO 27001 Certified", "4.8/5 G2 Rating"],
   "business_model": "B2B SaaS",
   "ai_visibility_opportunities": ["Implement structured schema markup for courses", "Build a dedicated FAQ section targeting conversational queries"],
+  "seed_topics": [
+    "sql weekend batch classes",
+    "1 on 1 career mentorship",
+    "product manager career switch",
+    "women returning to tech program"
+  ],
   "pre_query_discovery": {{
     "industry_topics": ["LMS Platforms", "Virtual Science Labs"],
     "industry_terminology": ["LTI Integration", "Active Learning"],

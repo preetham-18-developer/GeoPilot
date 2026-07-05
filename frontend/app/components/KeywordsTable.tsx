@@ -139,27 +139,71 @@ export function KeywordsTable({ projectId, userId }: KeywordsTableProps) {
     );
   }
 
-  const exportCSV = () => {
-    const headers = ["Keyword", "Type", "Frequency"];
-    const rows = keywords.map((kw) => [
-      kw.keyword || "",
-      kw.keyword_type || "KEYWORD",
-      kw.frequency !== undefined ? kw.frequency : "",
-    ]);
-    const csvContent =
-      "data:text/csv;charset=utf-8," +
-      [
-        headers.join(","),
-        ...rows.map((e) =>
-          e.map((val) => `"${String(val).replace(/"/g, '""')}"`).join(",")
-        ),
-      ].join("\n");
-    const link = document.createElement("a");
-    link.href = encodeURI(csvContent);
-    link.download = `keywords_project_${projectId}_${Date.now()}.csv`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+  const exportCSV = async () => {
+    try {
+      const token = getToken();
+      const params = new URLSearchParams({
+        page: "1",
+        page_size: "10000",
+        limit: "10000",
+      });
+      if (search) params.set("search", search);
+
+      const urls = [
+        `${API_BASE}/api/v1/projects/${projectId}/keywords?${params}`,
+        `${API_BASE}/api/v1/analysis/keywords/${projectId}?${params}`,
+      ];
+
+      let allKeywords: Keyword[] = [];
+      let success = false;
+
+      for (const url of urls) {
+        try {
+          const response = await fetch(url, {
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: token ? `Bearer ${token}` : "",
+            },
+          });
+          if (response.ok) {
+            const data = await response.json();
+            allKeywords = data.keywords || data.items || data.data || data.results || [];
+            success = true;
+            break;
+          }
+        } catch (err) {
+          console.error("Export fetch error:", err);
+        }
+      }
+
+      if (!success) {
+        alert("Failed to export all keywords");
+        return;
+      }
+
+      const headers = ["Keyword", "Type", "Frequency"];
+      const rows = allKeywords.map((kw) => [
+        kw.keyword || "",
+        kw.keyword_type || "KEYWORD",
+        kw.frequency !== undefined ? kw.frequency : "",
+      ]);
+      const csvContent =
+        "data:text/csv;charset=utf-8," +
+        [
+          headers.join(","),
+          ...rows.map((e) =>
+            e.map((val) => `"${String(val).replace(/"/g, '""')}"`).join(",")
+          ),
+        ].join("\n");
+      const link = document.createElement("a");
+      link.href = encodeURI(csvContent);
+      link.download = `keywords_project_${projectId}_${Date.now()}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (err) {
+      console.error("CSV Export error:", err);
+    }
   };
 
   return (

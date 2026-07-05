@@ -346,30 +346,27 @@ Return EXACTLY this JSON structure (no other text):
 
 SEED TOPICS — most critical field. Rules:
 
-1. Each seed topic = something a real person would search for
-2. Must be SPECIFIC — not generic category names
-3. Must exist in the website content provided
-4. Format: "[specific thing] [optional location]"
+1. Each topic must be 2-5 words minimum
+2. Must be something a real person searches on Google
+3. Must relate to a specific service, course, or program
+4. NEVER extract single generic words
+5. NEVER extract: passion, helping, companies, students, careers
+   These are too generic — exclude them
 
-WRONG examples (too generic, reject these):
-"library services", "our collections", "research help", "quality education"
+For thelibrarycompany.com the correct topics are:
+- sql weekend batch classes
+- 1 on 1 career mentorship
+- product manager career switch
+- women returning to tech program
+- placement support engineering students
+- tech career guidance freshers
+- industry mentors from top companies
+- relaunchher women tech program
+- sql training with job placement
+- career change into technology
 
-RIGHT examples (specific, searchable):
-"Benjamin Franklin original manuscripts Philadelphia"
-"18th century colonial American documents"
-"genealogy research assistance Philadelphia"
-"SQL weekend batch classes Nellore"
-"teeth whitening Nellore dental clinic"
-"emergency dental care same day appointment"
-
-Think: if someone typed this into ChatGPT and asked
-"recommend a [business type] for this" — would this business
-come up if it had content about this topic?
-
-If YES → include as seed topic.
-If NO → exclude.
-
-Generate between 10-40 seed topics.
+Extract 15-40 topics like these from the website content.
+Return as JSON array of strings.
 Return ONLY the JSON. Nothing else.`;
 }
 

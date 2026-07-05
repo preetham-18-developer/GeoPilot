@@ -1236,10 +1236,12 @@ async def run_analysis_pipeline(project_id: str, run_id: str, website_url: str):
                 pass
             return
 
-        # J. Update Project category/industry and status
+        # J. Update Project category/industry, seed_topics, and status
         industry = bi_report.get("industry", "Other")
+        seed_topics = bi_report.get("seed_topics") or []
         supabase_client.table("projects").update({
             "industry": industry,
+            "seed_topics": seed_topics,
             "status": "completed",
             "current_agent": None
         }).eq("id", project_id).execute()

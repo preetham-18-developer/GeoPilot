@@ -25,7 +25,7 @@ router = APIRouter(prefix="/analysis", tags=["analysis"])
 def get_analysis_keywords(
     project_id: str,
     page: int = 1,
-    page_size: int = 10,
+    page_size: int = 10000,
     search: Optional[str] = None,
     keyword_type: Optional[str] = None,
     sort_by: str = "keyword",
