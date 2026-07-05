@@ -30,6 +30,7 @@ model Project {
   projectName      String                 @map("project_name")
   websiteUrl       String                 @map("website_url")
   industry         String?
+  seedTopics       String[]               @default([]) @map("seed_topics")
   status           String                 @default("pending")
   createdAt        DateTime               @default(now()) @map("created_at") @db.Timestamptz
   updatedAt        DateTime               @default(now()) @map("updated_at") @db.Timestamptz
