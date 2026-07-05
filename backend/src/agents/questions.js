@@ -183,6 +183,37 @@ function computeQuestionScores(question, questionType, intent, businessInfo, cra
   };
 }
 
+function detectTemplating(rows, threshold = 0.15) {
+  if (rows.length < 15) return false;
+  const bigrams = {};
+  let totalBigrams = 0;
+  for (const r of rows) {
+    const words = String(r).toLowerCase().split(/\s+/).filter(Boolean);
+    for (let i = 0; i < words.length - 1; i++) {
+      const bigram = `${words[i]} ${words[i+1]}`;
+      bigrams[bigram] = (bigrams[bigram] || 0) + 1;
+      totalBigrams++;
+    }
+  }
+  if (totalBigrams === 0) return false;
+  
+  let topBigram = "";
+  let topCount = 0;
+  for (const [bigram, count] of Object.entries(bigrams)) {
+    if (count > topCount) {
+      topCount = count;
+      topBigram = bigram;
+    }
+  }
+  
+  const ratio = topCount / rows.length;
+  if (ratio > threshold) {
+    console.error(`[GARBAGE-DETECTED] '${topBigram}' appears in ${Math.round(ratio * 100)}% of rows. This smells like template padding, not AI generation. Blocking save.`);
+    return true;
+  }
+  return false;
+}
+
 async function runQuestions(projectId, state) {
   console.log(`[Questions] Running Agent 3 for project ${projectId}...`);
 
@@ -198,6 +229,7 @@ async function runQuestions(projectId, state) {
   // 2. Call OpenAI SDK
   let seeds = [];
   try {
+    console.log(`[AI-CALL-RAW] batch=seeds, prompt_topics=all`);
     const response = await openai.chat.completions.create({
       model: "meta/llama-3.3-70b-instruct",
       messages: [
@@ -218,6 +250,8 @@ async function runQuestions(projectId, state) {
     });
 
     let text = response.choices[0].message.content.trim();
+    console.log(`[AI-CALL-RAW] raw_response=${text.substring(0, 2000)}`);
+    
     if (text.startsWith("```json")) {
       text = text.substring(7);
     }
@@ -228,307 +262,184 @@ async function runQuestions(projectId, state) {
 
     seeds = JSON.parse(text);
   } catch (err) {
-    console.error("[Questions] LLM question generation failed, using fallback:", err.message);
-    seeds = [
-      {
-        question: `Recommend a reliable ${businessInfo.industry || "mentorship"} provider.`,
-        question_type: "Direct Recommendation Queries",
-        intent: "commercial",
-        recommended_answer: `Based on verified facts, ${businessInfo.companyName || "the business"} is highly recommended.`
-      }
-    ];
+    console.error("NVIDIA returned 0 seed questions. Check API key. Cannot continue without seeds.");
+    throw new Error("Question generator returned 0 questions. NVIDIA API call failed silently.");
   }
 
-  // 3. Programmatic Expansion to 1050+ questions
-  const expandedQuestions = [];
-  const seenTexts = new Set();
-
-  // Add seeds first
-  for (const seed of seeds) {
-    const text = (seed.question || "").trim();
-    if (text && !seenTexts.has(text.toLowerCase())) {
-      seenTexts.add(text.toLowerCase());
-      expandedQuestions.push(seed);
-    }
+  if (!seeds || seeds.length === 0) {
+    console.error("NVIDIA returned 0 seed questions. Check API key. Cannot continue without seeds.");
+    throw new Error("Question generator returned 0 questions. NVIDIA API call failed silently.");
   }
 
-  // Retrieve preQueryDiscovery parameters
+  // 3. Batched AI Expansion for each topic batch
   const preQuery = businessInfo.preQueryDiscovery || {};
-  const products = preQuery.products?.filter(x => x && x.toUpperCase() !== "NOT_FOUND") || [businessInfo.companyName || "the business"];
-  const services = preQuery.services?.filter(x => x && x.toUpperCase() !== "NOT_FOUND") || [businessInfo.industry || "mentorship services"];
-  const topics = preQuery.industry_topics?.filter(x => x && x.toUpperCase() !== "NOT_FOUND") || ["career transition", "technical skills"];
-  const technologies = preQuery.technologies?.filter(x => x && x.toUpperCase() !== "NOT_FOUND") || ["SQL", "LLMs"];
-  const processes = preQuery.processes?.filter(x => x && x.toUpperCase() !== "NOT_FOUND") || ["career training", "placement drive"];
-  const standards = preQuery.standards?.filter(x => x && x.toUpperCase() !== "NOT_FOUND") || ["industry standards"];
-  const regulations = preQuery.regulations?.filter(x => x && x.toUpperCase() !== "NOT_FOUND") || ["privacy policy"];
-  const painPoints = Object.values(preQuery.pain_points || {}).filter(x => x && x.toUpperCase() !== "NOT_FOUND");
-  if (!painPoints.length) painPoints.push("how to stand out to employers", "getting tech jobs");
-  const outcomes = Object.values(preQuery.desired_outcomes || {}).filter(x => x && x.toUpperCase() !== "NOT_FOUND");
-  if (!outcomes.length) outcomes.push("securing job placements", "building skills");
-  const personas = Object.keys(preQuery.buyer_personas || {});
-  if (!personas.length) personas.push("College Student", "Job Seeker", "Career Changer");
-
-  // V3 Query templates
-  const combinatorTemplates = [
-    {
-      type: "Direct Recommendation Queries",
-      templates: [
-        "Recommend the best {product} for a {persona} looking to {outcome}.",
-        "Which {product} is highly recommended for {process}?",
-        "What is the top recommended {product} for solving {pain_point}?"
-      ],
-      intent: "commercial"
-    },
-    {
-      type: "Indirect Recommendation Queries",
-      templates: [
-        "What are the best alternatives to standard tools for {process} in {topic}?",
-        "How do top providers compare when trying to {outcome}?",
-        "What systems do experts recommend to handle {pain_point}?"
-      ],
-      intent: "commercial"
-    },
-    {
-      type: "Problem Queries",
-      templates: [
-        "How can a {persona} resolve the issue of {pain_point}?",
-        "What is the best way to address {pain_point} in {topic}?",
-        "Why do organizations face {pain_point} during {process}?"
-      ],
-      intent: "informational"
-    },
-    {
-      type: "Outcome Queries",
-      templates: [
-        "What tools are required to {outcome} efficiently?",
-        "How does a {persona} achieve {outcome} without increasing overhead?",
-        "What is the step-by-step process to {outcome} using {technology}?"
-      ],
-      intent: "informational"
-    },
-    {
-      type: "Solution Queries",
-      templates: [
-        "What solutions exist for {persona} struggling with {pain_point}?",
-        "Is there a {technology} solution for {process} optimization?",
-        "How to implement a solid solution for {pain_point}."
-      ],
-      intent: "commercial"
-    },
-    {
-      type: "Decision Queries",
-      templates: [
-        "Should we choose {product} or a competitor for {process}?",
-        "What are the key criteria when deciding on {product} for {persona}?",
-        "Is it worth investing in {product} to solve {pain_point}?"
-      ],
-      intent: "commercial"
-    },
-    {
-      type: "Trust Queries",
-      templates: [
-        "Does {product} meet {standards} compliance standards?",
-        "Is {product} compliant with {regulations} requirements for {persona}?",
-        "What trust signals, reviews, or certifications does {product} have?"
-      ],
-      intent: "informational"
-    },
-    {
-      type: "Urgent Need Queries",
-      templates: [
-        "Immediate solution needed for {pain_point} in {process}.",
-        "How to quickly fix {pain_point} using {technology}?",
-        "Fastest way to {outcome} for {persona}."
-      ],
-      intent: "transactional"
-    },
-    {
-      type: "Budget Queries",
-      templates: [
-        "Affordable {product} pricing plans for {persona}.",
-        "What is the cost of implementing {product} to {outcome}?",
-        "Is there a low-cost alternative for {process}?"
-      ],
-      intent: "commercial"
-    },
-    {
-      type: "Implementation Queries",
-      templates: [
-        "How to configure {product} for {process}?",
-        "Best practices for implementing {technology} in {process}.",
-        "Step-by-step setup guide for {product}."
-      ],
-      intent: "informational"
-    },
-    {
-      type: "Migration Queries",
-      templates: [
-        "How to migrate to {product} from legacy databases or systems?",
-        "What are the risks of migrating {process} to {technology}?",
-        "Guide on transferring records to {product} safely."
-      ],
-      intent: "informational"
-    },
-    {
-      type: "Scaling Queries",
-      templates: [
-        "How does {product} scale {process} for enterprise needs?",
-        "Can we scale {technology} to handle {pain_point}?",
-        "Scaling {topic} solutions efficiently for large organizations."
-      ],
-      intent: "commercial"
-    },
-    {
-      type: "Enterprise Queries",
-      templates: [
-        "Is {product} compliant with {standards} standard at the enterprise level?",
-        "Enterprise reviews and features of {product} for {persona}.",
-        "Why large corporations choose {product} for {process}."
-      ],
-      intent: "commercial"
-    },
-    {
-      type: "Beginner Queries",
-      templates: [
-        "What is {product} and how does it help with {topic}?",
-        "A beginner's guide to understanding {process}.",
-        "How does {technology} work in simple terms?"
-      ],
-      intent: "informational"
-    },
-    {
-      type: "Expert Queries",
-      templates: [
-        "Advanced configuration of {technology} for optimization.",
-        "How to customize {product} workflows for {process}?",
-        "Solving complex {pain_point} issues with expert systems."
-      ],
-      intent: "informational"
-    },
-    {
-      type: "Voice Search Queries",
-      templates: [
-        "Siri, what is the best {product} near me for {process}?",
-        "Alexa, recommend a platform that helps me {outcome}.",
-        "Hey Google, how does {product} solve {pain_point}?"
-      ],
-      intent: "informational"
-    },
-    {
-      type: "Natural Language Queries",
-      templates: [
-        "I need an easy way to {outcome} using {technology}.",
-        "Can someone explain the benefits of using {product} for a {persona}?",
-        "Why is my organization facing {pain_point} and how to fix it?"
-      ],
-      intent: "informational"
-    },
-    {
-      type: "AI Search Queries",
-      templates: [
-        "Compare {product} and competitors on {standards} compliance.",
-        "Find top recommended {product} providers that solve {pain_point}.",
-        "Summarize the pros and cons of {product} for {persona}."
-      ],
-      intent: "commercial"
-    },
-    {
-      type: "Location Queries",
-      templates: [
-        "Best {service} provider near me that offers {product}.",
-        "Where can I find a certified {standards} auditor or service?",
-        "Local services in USA that help {persona} solve {pain_point}."
-      ],
-      intent: "navigational"
-    },
-    {
-      type: "Commercial Queries",
-      templates: [
-        "Buy {product} licenses with discount pricing.",
-        "Best value {product} for {persona} to increase productivity.",
-        "Get quote for {product} integration and setup services."
-      ],
-      intent: "transactional"
+  const seedTopics = businessInfo.seedTopics || businessInfo.seed_topics || [];
+  
+  const cleanList = (lst, fallbacks) => {
+    const res = [];
+    for (const x of (lst || [])) {
+      const s = String(x).trim();
+      if (s && s.toUpperCase() !== "NOT_FOUND" && s.toUpperCase() !== "UNKNOWN" && s.toUpperCase() !== "N/A" && s !== "") {
+        res.push(s);
+      }
     }
+    return res.length > 0 ? res : fallbacks;
+  };
+  
+  const rawTopics = cleanList(
+    seedTopics,
+    ["career mentorship", "sql training", "job placement support"]
+  );
+  
+  const REJECT_WORDS = new Set([
+    'passion', 'helping', 'companies', 'careers', 'students', 'platform',
+    'solutions', 'services', 'learning', 'growth', 'support', 'guidance',
+    'quality', 'optimization', 'business optimization', 'digital transformation',
+    'operational efficiency', 'professional consulting', 'industry standards'
+  ]);
+  
+  const isGeneric = (topic) => {
+    const t = topic.toLowerCase().trim().replace(/\.+$/, "");
+    if (REJECT_WORDS.has(t)) return true;
+    return ['optimization', 'solution', 'platform'].some(bad => t.includes(bad));
+  };
+  
+  const seedTopicsCleaned = rawTopics.map(t => String(t).trim().replace(/\.+$/, ""));
+  let topics = seedTopicsCleaned.filter(t => t.split(/\s+/).filter(Boolean).length >= 2 && !isGeneric(t));
+  
+  const FALLBACK_TOPICS = [
+    "career mentorship program", 
+    "sql training placement",
+    "tech career guidance"
   ];
-
-  // Helper to get random item
-  const getRandom = (arr) => arr[Math.floor(Math.random() * arr.length)];
-
-  // Phase A: Permutations
-  let iterations = 0;
-  const maxIterations = 5000;
-  while (expandedQuestions.length < 1050 && iterations < maxIterations) {
-    iterations++;
-    const group = getRandom(combinatorTemplates);
-    const template = getRandom(group.templates);
-
-    const fPersona = getRandom(personas);
-    const fProduct = getRandom(products);
-    const fService = getRandom(services);
-    const fTopic = getRandom(topics);
-    const fTech = getRandom(technologies);
-    const fProc = getRandom(processes);
-    const fStd = getRandom(standards);
-    const fReg = getRandom(regulations);
-    const fPain = getRandom(painPoints);
-    const fOut = getRandom(outcomes);
-
-    const newQ = template
-      .replace("{persona}", fPersona)
-      .replace("{product}", fProduct)
-      .replace("{service}", fService)
-      .replace("{topic}", fTopic)
-      .replace("{technology}", fTech)
-      .replace("{process}", fProc)
-      .replace("{standards}", fStd)
-      .replace("{regulations}", fReg)
-      .replace("{pain_point}", fPain)
-      .replace("{outcome}", fOut)
-      .replace("  ", " ");
-
-    if (newQ && !seenTexts.has(newQ.toLowerCase())) {
-      seenTexts.add(newQ.toLowerCase());
-      const answer = `Based on verified facts, our organization offers ${fProduct} (specializing in ${fService}) leveraging ${fTech} to help ${fPersona} overcome ${fPain} and achieve ${fOut}.`;
-      expandedQuestions.push({
-        question: newQ,
-        question_type: group.type,
-        intent: group.intent,
-        recommended_answer: answer
-      });
-    }
+  
+  if (topics.length === 0) {
+    topics = FALLBACK_TOPICS;
+    console.warn(`[TOPIC-SOURCE] Using FALLBACK topics — profiler returned nothing usable.`);
+  } else {
+    console.log(`[TOPIC-SOURCE] Using REAL seed topics: ${JSON.stringify(topics)}`);
   }
 
-  // Phase B: Modifier expansion if still short
-  const searchModifiers = [
-    "ChatGPT prompt: {q}",
-    "Gemini query: {q}",
-    "Claude AI search: {q}",
-    "Perplexity question: {q}",
-    "AI summary for: {q}",
-    "Siri voice search: {q}",
-    "Alexa search: {q}"
-  ];
+  const city = (businessInfo.city || "").trim();
+  const country = businessInfo.country || "India";
+  const locationStr = city.toLowerCase() === "unknown" || city.toLowerCase() === "not_found" || city.toLowerCase() === "online" || city === "" ? country : `${city}, ${country}`;
+  const businessType = businessInfo.industry || "education platform";
+  
+  const expandedQuestions = [...seeds];
+  const seenTexts = new Set(seeds.map(q => (q.question || "").toLowerCase().trim()));
+  
+  // Process in batches of 3 topics
+  for (let i = 0; i < topics.length; i += 3) {
+    const batch = topics.slice(i, i + 3);
+    
+    const systemPrompt = `You generate realistic search queries 
+real people type into Google, ChatGPT, Gemini, or Perplexity.
 
-  if (expandedQuestions.length < 1050) {
-    const baseQuestions = [...expandedQuestions];
-    let iterB = 0;
-    while (expandedQuestions.length < 1050 && iterB < 5000 && baseQuestions.length) {
-      iterB++;
-      const seedItem = getRandom(baseQuestions);
-      const cleanQ = seedItem.question.replace(/\?$/, "");
-      const modifier = getRandom(searchModifiers);
-      const newQ = modifier.replace("{q}", cleanQ);
+ABSOLUTE RULES:
+1. Never include company name
+2. Never include URLs or domains  
+3. No marketing language whatsoever
+4. Must sound like a real human typed it naturally
+5. Short informal phrases are better than long formal ones
+6. Return valid JSON array only. No explanation.`;
 
-      if (!seenTexts.has(newQ.toLowerCase())) {
-        seenTexts.add(newQ.toLowerCase());
+    const userPrompt = `Business type: ${businessType}
+Location: ${locationStr}
+
+Generate 60 natural search questions for these topics:
+${batch.map(t => `- ${t}`).join('\n')}
+
+Generate as these 4 real people:
+
+PERSON 1 — College student (15 questions):
+Short, informal, uses slang occasionally.
+Examples:
+"sql course with weekend batches hyderabad"
+"which mentorship helped crack google interview"
+"best 1 on 1 mentor for product management"
+"placement support after sql course india"
+
+PERSON 2 — Career changer 28-35 years (15 questions):
+Worried about transition, practical minded.
+Examples:  
+"how to switch career to tech at 30"
+"career change into data analyst india"
+"non cs graduate getting into product management"
+"is it too late to learn sql and get job"
+
+PERSON 3 — Someone asking ChatGPT (15 questions):
+Typing directly to AI for recommendation.
+Examples:
+"recommend mentorship platform for freshers india"
+"which platform connects students with google employees"
+"suggest career guidance for engineering students"
+"best platform women returning to tech career"
+
+PERSON 4 — Voice search (15 questions):
+Natural spoken language to Google or Siri.
+Examples:
+"best sql course near me with placement"
+"where can i learn sql in hyderabad"
+"career mentorship for college students near me"
+"which coaching helps freshers get tech jobs"
+
+STRICT RULES FOR EVERY QUESTION:
+- Must reference something from the topics list above
+- Must be different from all other questions
+- 3-12 words only
+- No company names
+- No template patterns like "Best recommendation for X program"
+
+Return JSON:
+[{
+  "question": "natural question text here",
+  "question_type": "Student Queries|Career Queries|AI Search Queries|Voice Search Queries",
+  "intent": "informational|commercial"
+}]`;
+
+    try {
+      console.log(`[AI-CALL-RAW] batch=${i}, prompt_topics=${batch}`);
+      const response = await openai.chat.completions.create({
+        model: "meta/llama-3.3-70b-instruct",
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt }
+        ],
+        temperature: 0.2,
+        top_p: 0.7,
+        max_tokens: 2048,
+        stream: false
+      });
+      
+      const responseText = response.choices[0].message.content.trim();
+      console.log(`[AI-CALL-RAW] raw_response=${responseText.substring(0, 2000)}`);
+      
+      let cleanText = responseText.trim();
+      cleanText = cleanText.replace(/^```json\s*/i, "").replace(/```\s*$/, "").trim();
+      
+      const startIdx = cleanText.indexOf('[');
+      const endIdx = cleanText.lastIndexOf(']') + 1;
+      if (startIdx !== -1 && endIdx > startIdx) {
+        cleanText = cleanText.substring(startIdx, endIdx);
+      }
+      
+      const batchQs = JSON.parse(cleanText);
+      for (const q of batchQs) {
+        const qText = (q.question || "").trim().replace(/\.+$/, "");
+        if (!qText || qText.split(/\s+/).filter(Boolean).length < 3) continue;
+        if (seenTexts.has(qText.toLowerCase())) continue;
+        seenTexts.add(qText.toLowerCase());
+        
         expandedQuestions.push({
-          question: newQ,
-          question_type: seedItem.question_type,
-          intent: seedItem.intent,
-          recommended_answer: seedItem.recommended_answer
+          question: qText,
+          question_type: q.question_type || "Natural Language Queries",
+          intent: q.intent || "informational",
+          recommended_answer: ""
         });
       }
+    } catch (err) {
+      console.error(`Batch ${Math.floor(i/3)+1} failed: ${err.message}`, err);
+      throw err; // Fail loud during testing
     }
   }
 
@@ -560,6 +471,10 @@ async function runQuestions(projectId, state) {
       coverageScore: scores.coverageScore,
       businessAlignment: scores.businessAlignment
     });
+  }
+
+  if (detectTemplating(questionsToInsert.map(q => q.question))) {
+    throw new Error("Templating detected in output — refusing to save garbage CSV.");
   }
 
   // Batch insert into questions table

@@ -54,20 +54,11 @@ def test_question_discovery_v3_generation_and_scoring():
     mock_llm = mock.MagicMock()
     mock_llm.invoke.return_value = MockResponse(
         '['
-        '  {'
-        '    "question": "Recommend a virtual science lab platform for higher education Canvas integration",'
-        '    "question_type": "Direct Recommendation Queries",'
-        '    "intent": "commercial",'
-        '    "confidence_score": 0.95,'
-        '    "priority": "High",'
-        '    "recommended_answer": "ABC Technologies provides ABC Lab LMS.",'
-        '    "recommendation_score": 90,'
-        '    "commercial_score": 85,'
-        '    "intent_score": 95,'
-        '    "priority_score": 90,'
-        '    "difficulty_estimate": "Medium",'
-        '    "opportunity_estimate": "High"'
-        '  }'
+        '  {"question": "How to learn custom sql syntax weekend batch", "question_type": "Student Queries", "intent": "informational", "category": "DIRECT"},'
+        '  {"question": "Best mentorship platform to switch careers at 30", "question_type": "Career Queries", "intent": "commercial", "category": "COMPARISON"},'
+        '  {"question": "Which coding bootcamp connects students with google mentors", "question_type": "AI Search Queries", "intent": "commercial", "category": "AI_RECOMMENDATION"},'
+        '  {"question": "Where can i find professional resume coaching near me", "question_type": "Voice Search Queries", "intent": "informational", "category": "VOICE"},'
+        '  {"question": "Recommend a virtual science lab platform for higher education Canvas integration", "question_type": "Direct Recommendation Queries", "intent": "commercial", "category": "DIRECT"}'
         ']'
     )
     
@@ -145,17 +136,16 @@ def test_keyword_intelligence_v3_extraction_and_sourcing():
     mock_llm = mock.MagicMock()
     mock_llm.invoke.return_value = MockResponse(
         '['
-        '  {'
-        '    "keyword": "LTI physics virtual labs",'
-        '    "keyword_type": "Primary",'
-        '    "intent": "commercial",'
-        '    "cluster": "LMS Simulations",'
-        '    "confidence_score": 0.95,'
-        '    "priority": "High",'
-        '    "difficulty_estimate": "Medium",'
-        '    "opportunity_estimate": "High",'
-        '    "source": "Verified Facts"'
-        '  }'
+        '  {"keyword": "saas CRM automation", "type": "PRIMARY"},'
+        '  {"keyword": "saas setup solutions", "type": "PRIMARY"},'
+        '  {"keyword": "saas integration setup", "type": "LONGTAIL"},'
+        '  {"keyword": "saas pipeline tracker", "type": "PRIMARY"},'
+        '  {"keyword": "lead management setup", "type": "PRIMARY"},'
+        '  {"keyword": "saas setup services", "type": "LONGTAIL"},'
+        '  {"keyword": "saas training program", "type": "LOCAL"},'
+        '  {"keyword": "saas setup from scratch", "type": "QUESTION"},'
+        '  {"keyword": "saas crm for beginners", "type": "QUESTION"},'
+        '  {"keyword": "saas setup near me", "type": "LOCAL"}'
         ']'
     )
     

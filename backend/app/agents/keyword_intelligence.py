@@ -127,7 +127,9 @@ class KeywordIntelligenceAgent:
                 services=", ".join(services),
                 customers=", ".join(personas)
             )
+            logger.info(f"[AI-CALL-RAW] batch=keywords, prompt_topics=all")
             response = self.llm.invoke(formatted_prompt)
+            logger.info(f"[AI-CALL-RAW] raw_response={response.content[:2000]}")
             
             resp_text = response.content.strip()
             if resp_text.startswith("```json"):
@@ -145,8 +147,8 @@ class KeywordIntelligenceAgent:
                 
             return mapped_kws
         except Exception as e:
-            logger.error(f"Error in V3 Keyword Discovery LLM execution: {e}")
-            return []
+            logger.error(f"Error in V3 Keyword Discovery LLM execution: {e}", exc_info=True)
+            raise
 
     def map_to_db_format(self, llm_kw: Dict[str, Any], bi: Dict[str, Any]) -> Dict[str, Any]:
         kw = llm_kw.get("keyword", "").strip()
@@ -179,6 +181,26 @@ class KeywordIntelligenceAgent:
             "opportunity_estimate": "High",
             "source": "Verified Facts"
         }
+
+from collections import Counter
+
+def detect_templating(rows: List[str], threshold: float = 0.15) -> bool:
+    """Returns True if templating/padding is detected."""
+    if len(rows) < 15:
+        return False
+    bigrams = Counter()
+    for r in rows:
+        words = str(r).lower().split()
+        bigrams.update(zip(words, words[1:]))
+    if not bigrams:
+        return False
+    top_bigram, count = bigrams.most_common(1)[0]
+    ratio = count / len(rows)
+    if ratio > threshold:
+        logger.error(f"[GARBAGE-DETECTED] '{top_bigram}' appears in {ratio:.0%} of rows. "
+                      f"This smells like template padding, not AI generation. Blocking save.")
+        return True
+    return False
 
 def run_keyword_intelligence(state: AgentState) -> Dict[str, Any]:
     logger.info("Running V3 Keyword Intelligence Node (Complete Refactor)...")
@@ -222,52 +244,35 @@ def run_keyword_intelligence(state: AgentState) -> Dict[str, Any]:
     }
     
     valid_seed_topics = [
-        t for t in seed_topics 
+        str(t).strip().rstrip('.') for t in seed_topics 
         if len(str(t).split()) >= 2 
         and str(t).lower() not in REJECT_SINGLES
     ]
     
-    topics = clean_list(
-        pre_query.get("industry_topics", [])
-    ) or valid_seed_topics or [
+    FALLBACK_TOPICS = [
         "career mentorship program",
         "sql training placement", 
         "tech job guidance"
     ]
     
+    topics_from_query = clean_list(pre_query.get("industry_topics", []))
+    topics_from_query_cleaned = [str(t).strip().rstrip('.') for t in topics_from_query]
+    
+    topics = topics_from_query_cleaned or valid_seed_topics
+    
+    if not topics:
+        topics = FALLBACK_TOPICS
+        logger.warning(f"[TOPIC-SOURCE] Using FALLBACK topics — profiler returned nothing usable.")
+    else:
+        logger.info(f"[TOPIC-SOURCE] Using REAL seed topics: {topics}")
+        
     core_topics = list(set(services + topics))
     
     # Add seeds to candidates
     seed_texts = [s["keyword"] for s in seeds]
     candidate_list = seed_texts + extracted_candidates
     
-    # Step 2: Generate location variants
-    location_variants = []
-    for topic in core_topics:
-        t_clean = topic.strip().lower()
-        location_variants.append(t_clean)
-        location_variants.append(f"{t_clean} near me")
-        if city:
-            location_variants.append(f"{t_clean} {city.lower()}")
-            location_variants.append(f"{t_clean} in {city.lower()}")
-            location_variants.append(f"best {t_clean} {city.lower()}")
-            
-    # Step 3: Generate intent variants
-    intent_variants = []
-    for topic in core_topics:
-        t_clean = topic.strip().lower()
-        intent_variants.extend([
-            f"{t_clean} course",
-            f"{t_clean} program",
-            f"{t_clean} training",
-            f"{t_clean} platform",
-            f"{t_clean} online",
-            f"learn {t_clean}",
-            f"{t_clean} for beginners",
-            f"{t_clean} with placement"
-        ])
-        
-    all_candidates = candidate_list + location_variants + intent_variants
+    all_candidates = candidate_list
     
     # Step 4: Apply strict filters
     seen_keywords = set()
@@ -366,5 +371,8 @@ def run_keyword_intelligence(state: AgentState) -> Dict[str, Any]:
         item.update(scores)
         final_scored_keywords.append(item)
         
+    if detect_templating([k["keyword"] for k in final_scored_keywords]):
+        raise ValueError("Templating detected in output — refusing to save garbage CSV.")
+
     logger.info(f"V3 Keyword Intelligence finished. Scored {len(final_scored_keywords)} diverse keywords.")
     return {"keywords": final_scored_keywords}

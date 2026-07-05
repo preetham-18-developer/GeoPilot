@@ -96,18 +96,131 @@ function computeKeywordScores(keyword, keywordType, intent, businessInfo, crawle
   };
 }
 
+const { OpenAI } = require('openai');
+
+const OPENAI_API_KEY = process.env.NVIDIA_API_KEY_KEYWORDS || process.env.NVIDIA_API_KEY_QUESTIONS || "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";
+const BASE_URL = "https://integrate.api.nvidia.com/v1";
+
+const openai = new OpenAI({
+  apiKey: OPENAI_API_KEY,
+  baseURL: BASE_URL
+});
+
+const KEYWORD_SYSTEM_PROMPT = `You extract SEO keywords from business information.
+Keywords are short phrases people type into Google.
+They are 1-5 words. Natural. Specific. No marketing language.
+Return JSON array only. No markdown, no code blocks.`;
+
+const KEYWORD_USER_PROMPT = `Business: {business_type} in {location}
+Services: {services}
+Target customers: {customers}
+
+Please generate 60 highly relevant keywords in a valid JSON array.
+For each, specify "keyword" and "type" (one of: 'PRIMARY', 'LONGTAIL', 'LOCAL', 'QUESTION').`;
+
+function detectTemplating(rows, threshold = 0.15) {
+  if (rows.length < 15) return false;
+  const bigrams = {};
+  let totalBigrams = 0;
+  for (const r of rows) {
+    const words = String(r).toLowerCase().split(/\s+/).filter(Boolean);
+    for (let i = 0; i < words.length - 1; i++) {
+      const bigram = `${words[i]} ${words[i+1]}`;
+      bigrams[bigram] = (bigrams[bigram] || 0) + 1;
+      totalBigrams++;
+    }
+  }
+  if (totalBigrams === 0) return false;
+  
+  let topBigram = "";
+  let topCount = 0;
+  for (const [bigram, count] of Object.entries(bigrams)) {
+    if (count > topCount) {
+      topCount = count;
+      topBigram = bigram;
+    }
+  }
+  
+  const ratio = topCount / rows.length;
+  if (ratio > threshold) {
+    console.error(`[GARBAGE-DETECTED] '${topBigram}' appears in ${Math.round(ratio * 100)}% of rows. This smells like template padding, not AI generation. Blocking save.`);
+    return true;
+  }
+  return false;
+}
+
 async function runKeywords(projectId, state) {
-  console.log(`[Keywords] Running Agent 4 (Local NLP) for project ${projectId}...`);
+  console.log(`[Keywords] Running Agent 4 (NVIDIA LLM + Local NLP) for project ${projectId}...`);
 
   const businessInfo = state.businessProfile || {};
-  
+  const websiteUrl = state.websiteUrl || "";
+
   // 1. Fetch crawled pages content
   const pages = await prisma.crawledPage.findMany({
     where: { projectId },
     select: { title: true, content: true }
   });
 
-  // 2. Extract seed terms locally using compromise.js
+  // 2. Call NVIDIA LLM
+  let seeds = [];
+  try {
+    const preQuery = businessInfo.preQueryDiscovery || {};
+    const cleanList = (lst) => {
+      if (!lst) return [];
+      return [].concat(lst).map(x => String(x).trim()).filter(x => x && x.toUpperCase() !== "NOT_FOUND");
+    };
+    
+    const services = cleanList(preQuery.services).join(", ") || businessInfo.industry || "industry solutions";
+    const personasDict = preQuery.buyer_personas || {};
+    const personas = Object.keys(personasDict).filter(k => k && String(k).toUpperCase() !== "NOT_FOUND").join(", ") || "student, job seeker";
+    
+    const city = (businessInfo.city || "").trim();
+    const country = (businessInfo.country || "").trim();
+    const locationStr = city.toLowerCase() === "unknown" || city.toLowerCase() === "not_found" || city.toLowerCase() === "online" || city === "" ? (country || "online") : `${city}, ${country}`;
+
+    console.log(`[AI-CALL-RAW] batch=keywords, prompt_topics=all`);
+    const response = await openai.chat.completions.create({
+      model: "meta/llama-3.3-70b-instruct",
+      messages: [
+        { role: "system", content: KEYWORD_SYSTEM_PROMPT },
+        { 
+          role: "user", 
+          content: KEYWORD_USER_PROMPT
+            .replace("{business_type}", businessInfo.industry || "education platform")
+            .replace("{location}", locationStr)
+            .replace("{services}", services)
+            .replace("{customers}", personas)
+        }
+      ],
+      temperature: 0.2,
+      top_p: 0.7,
+      max_tokens: 1024,
+      stream: false
+    });
+
+    let text = response.choices[0].message.content.trim();
+    console.log(`[AI-CALL-RAW] raw_response=${text.substring(0, 2000)}`);
+    
+    if (text.startsWith("```json")) {
+      text = text.substring(7);
+    }
+    if (text.endsWith("```")) {
+      text = text.substring(0, text.length - 3);
+    }
+    text = text.trim();
+
+    seeds = JSON.parse(text);
+  } catch (err) {
+    console.error("NVIDIA returned 0 seed keywords. Check API key. Cannot continue without seeds.");
+    throw new Error("Keyword generator returned 0 questions. NVIDIA API call failed silently.");
+  }
+
+  if (!seeds || seeds.length === 0) {
+    console.error("NVIDIA returned 0 seed keywords. Check API key. Cannot continue without seeds.");
+    throw new Error("Keyword generator returned 0 questions. NVIDIA API call failed silently.");
+  }
+
+  // 3. Extract seed terms locally using compromise.js
   const termFrequencies = {};
   const stopWords = new Set(["the", "and", "our", "this", "that", "with", "from", "for", "you", "your", "they", "them", "about", "welcome", "homepage", "website"]);
 
@@ -115,7 +228,6 @@ async function runKeywords(projectId, state) {
     const text = `${page.title || ""} ${page.content || ""}`;
     const doc = nlp(text);
     
-    // Extract patterns
     const adjNoun = doc.match('#Adjective #Noun').out('array');
     const nounNoun = doc.match('#Noun #Noun').out('array');
     const singleNouns = doc.nouns().out('array');
@@ -127,155 +239,101 @@ async function runKeywords(projectId, state) {
     });
   });
 
-  // Sort terms by frequency and take top 50 as seed keywords
-  const seeds = Object.entries(termFrequencies)
+  const extractedCandidates = Object.entries(termFrequencies)
     .sort((a, b) => b[1] - a[1])
     .slice(0, 50)
     .map(entry => entry[0]);
 
-  // Fallback seeds if no terms were extracted
-  if (!seeds.length) {
-    seeds.push("career mentorship", "placement drive", "sql training", "resume transition");
-  }
-
-  // 3. Programmatic Expansion to 5050+ keywords
-  const expandedKeywords = [];
+  // Combine LLM seeds and Local candidates
+  const allCandidates = [];
   const seenKeywords = new Set();
 
-  // Add seeds first
-  seeds.forEach(seed => {
-    if (!seenKeywords.has(seed)) {
-      seenKeywords.add(seed);
-      expandedKeywords.push({
-        keyword: seed,
-        keyword_type: "Primary",
-        intent: "commercial",
-        cluster: "General Solutions",
+  // Add LLM seeds first
+  seeds.forEach(item => {
+    const kw = (item.keyword || "").trim().replace(/\.+$/, "");
+    if (kw && !seenKeywords.has(kw.toLowerCase())) {
+      seenKeywords.add(kw.toLowerCase());
+      
+      let dbType = "Primary";
+      let dbIntent = "commercial";
+      const kwType = (item.type || "PRIMARY").toUpperCase();
+      if (kwType === "PRIMARY") {
+        dbType = "Primary";
+        dbIntent = "commercial";
+      } else if (kwType === "LONGTAIL") {
+        dbType = "Long Tail";
+        dbIntent = "informational";
+      } else if (kwType === "LOCAL") {
+        dbType = "Location";
+        dbIntent = "navigational";
+      } else if (kwType === "QUESTION") {
+        dbType = "Voice Search";
+        dbIntent = "informational";
+      }
+
+      allCandidates.push({
+        keyword: kw,
+        keyword_type: dbType,
+        intent: dbIntent,
+        cluster: (businessInfo.industry || "General") + " Solutions",
         source: "Verified Facts"
       });
     }
   });
 
-  const preQuery = businessInfo.preQueryDiscovery || {};
-  const products = preQuery.products?.filter(x => x && x.toUpperCase() !== "NOT_FOUND") || [businessInfo.companyName || "the business"];
-  const services = preQuery.services?.filter(x => x && x.toUpperCase() !== "NOT_FOUND") || [businessInfo.industry || "mentorship services"];
-  const topics = preQuery.industry_topics?.filter(x => x && x.toUpperCase() !== "NOT_FOUND") || ["career transition", "technical skills"];
-  const technologies = preQuery.technologies?.filter(x => x && x.toUpperCase() !== "NOT_FOUND") || ["SQL", "LLMs"];
-  const processes = preQuery.processes?.filter(x => x && x.toUpperCase() !== "NOT_FOUND") || ["career training"];
-  const standards = preQuery.standards?.filter(x => x && x.toUpperCase() !== "NOT_FOUND") || ["industry standard"];
-  const regulations = preQuery.regulations?.filter(x => x && x.toUpperCase() !== "NOT_FOUND") || ["privacy compliance"];
-  const painPoints = Object.values(preQuery.pain_points || {}).filter(x => x && x.toUpperCase() !== "NOT_FOUND");
-  if (!painPoints.length) painPoints.push("operational overhead");
-  const outcomes = Object.values(preQuery.desired_outcomes || {}).filter(x => x && x.toUpperCase() !== "NOT_FOUND");
-  if (!outcomes.length) outcomes.push("improving career opportunities");
-  const personas = Object.keys(preQuery.buyer_personas || {});
-  if (!personas.length) personas.push("student", "job seeker");
+  // Add extracted candidates
+  extractedCandidates.forEach(cand => {
+    const kw = cand.trim().replace(/\.+$/, "");
+    if (kw && !seenKeywords.has(kw.toLowerCase())) {
+      seenKeywords.add(kw.toLowerCase());
+      
+      const words = kw.split(/\s+/).filter(Boolean);
+      let dbType = "Primary";
+      let dbIntent = "commercial";
+      if (words.length >= 4) {
+        dbType = "Long Tail";
+        dbIntent = "informational";
+      }
 
-  const combinerPatterns = [
-    { pattern: "{product} for {persona}", type: "Role", intent: "commercial", source: "Verified Facts | Authority Sources" },
-    { pattern: "{service} for {persona}", type: "Role", intent: "commercial", source: "Verified Facts | Authority Sources" },
-    { pattern: "{product} {topic}", type: "Topic", intent: "informational", source: "Verified Facts | Industry Topics" },
-    { pattern: "best {product} to {outcome}", type: "Opportunity", intent: "commercial", source: "Verified Facts | Outcomes" },
-    { pattern: "{tech} in {process}", type: "Long Tail", intent: "informational", source: "Industry Topics" },
-    { pattern: "{tech} {standards} compliance", type: "Authority", intent: "informational", source: "Industry Topics | Authority Sources" },
-    { pattern: "{product} complying with {regulations}", type: "Authority", intent: "informational", source: "Verified Facts | Authority Sources" },
-    { pattern: "how to solve {pain_point} with {product}", type: "Problem", intent: "commercial", source: "Pain Points | Verified Facts" },
-    { pattern: "{persona} guides to {topic}", type: "Semantic", intent: "informational", source: "Industry Topics | Authority Sources" },
-    { pattern: "{service} {standards} checklist", type: "Authority", intent: "informational", source: "Industry Topics | Authority Sources" },
-    { pattern: "pricing of {product} for {persona}", type: "Commercial", intent: "commercial", source: "Verified Facts | Authority Sources" },
-    { pattern: "siri search for {product}", type: "Voice Search", intent: "navigational", source: "Recommendation Queries" },
-    { pattern: "alexa find {product}", type: "Voice Search", intent: "navigational", source: "Recommendation Queries" },
-    { pattern: "chatgpt recommended {product}", type: "AI Search", intent: "commercial", source: "Recommendation Queries" },
-    { pattern: "perplexity alternatives for {product}", type: "AI Search", intent: "commercial", source: "Recommendation Queries" },
-    { pattern: "{product} local {service}", type: "Location", intent: "navigational", source: "Verified Facts" },
-    { pattern: "latest trends in {topic}", type: "Trend", intent: "informational", source: "Industry Topics" }
-  ];
-
-  const getRandom = (arr) => arr[Math.floor(Math.random() * arr.length)];
-
-  // Phase A: Permutations
-  let iterations = 0;
-  const maxIterations = 6000;
-  while (expandedKeywords.length < 5050 && iterations < maxIterations) {
-    iterations++;
-    const rule = getRandom(combinerPatterns);
-    
-    const fPersona = getRandom(personas);
-    const fProduct = getRandom(products);
-    const fService = getRandom(services);
-    const fTopic = getRandom(topics);
-    const fTech = getRandom(technologies);
-    const fProc = getRandom(processes);
-    const fStd = getRandom(standards);
-    const fReg = getRandom(regulations);
-    const fPain = getRandom(painPoints);
-    const fOut = getRandom(outcomes);
-
-    const newKw = rule.pattern
-      .replace("{persona}", fPersona)
-      .replace("{product}", fProduct)
-      .replace("{service}", fService)
-      .replace("{topic}", fTopic)
-      .replace("{technology}", fTech)
-      .replace("{process}", fProc)
-      .replace("{standards}", fStd)
-      .replace("{regulations}", fReg)
-      .replace("{pain_point}", fPain)
-      .replace("{outcome}", fOut)
-      .replace("  ", " ");
-
-    if (newKw && !seenKeywords.has(newKw.toLowerCase())) {
-      seenKeywords.add(newKw.toLowerCase());
-      expandedKeywords.push({
-        keyword: newKw,
-        keyword_type: rule.type,
-        intent: rule.intent,
-        cluster: fTopic + " Solutions",
-        source: rule.source
+      allCandidates.push({
+        keyword: kw,
+        keyword_type: dbType,
+        intent: dbIntent,
+        cluster: (businessInfo.industry || "General") + " Solutions",
+        source: "Recommendation Queries"
       });
     }
+  });
+
+  // Filter out generic keywords
+  const REJECT_SINGLES = new Set([
+    'passion', 'helping', 'companies', 'careers',
+    'students', 'optimization', 'solutions', 'platform',
+    'learning', 'growth', 'support', 'guidance', 'quality'
+  ]);
+  
+  const isGeneric = (kw) => {
+    const t = kw.toLowerCase().trim().replace(/\.+$/, "");
+    if (REJECT_SINGLES.has(t)) return true;
+    return ['optimization', 'solution', 'platform'].some(bad => t.includes(bad));
+  };
+
+  const finalExpanded = allCandidates.filter(item => {
+    const words = item.keyword.split(/\s+/).filter(Boolean);
+    if (words.length < 2) return false; // reject single word topics
+    if (isGeneric(item.keyword)) return false;
+    return true;
+  });
+
+  if (finalExpanded.length < 10) {
+    console.warn("Very few keywords generated. Check seed topics quality in profiler.");
   }
 
-  // Phase B: Prefix/Suffix Modifier expansion to guarantee 5050+
-  const prefixes = [
-    "best", "top", "affordable", "custom", "reliable", "secure", "modern", "certified", 
-    "professional", "local", "online", "cloud", "free", "enterprise", "strategic"
-  ];
-  const suffixes = [
-    "solutions", "platforms", "services", "tools", "agencies", "firms", "near me", "USA", 
-    "software", "applications", "integration", "setup", "guide", "tutorial"
-  ];
-
-  if (expandedKeywords.length < 5050) {
-    const baseKeywords = [...expandedKeywords];
-    for (const p of prefixes) {
-      if (expandedKeywords.length >= 5050) break;
-      for (const item of baseKeywords) {
-        if (expandedKeywords.length >= 5050) break;
-        for (const s of suffixes) {
-          if (expandedKeywords.length >= 5050) break;
-
-          const newKw = `${p} ${item.keyword} ${s}`.trim().replace(/\s+/g, " ");
-          if (!seenKeywords.has(newKw.toLowerCase())) {
-            seenKeywords.add(newKw.toLowerCase());
-            expandedKeywords.push({
-              keyword: newKw,
-              keyword_type: newKw.includes(" ") ? "Long Tail" : "Short Tail",
-              intent: item.intent,
-              cluster: item.cluster,
-              source: item.source
-            });
-          }
-        }
-      }
-    }
-  }
-
-  // 4. Score and insert keywords into database
+  // Ensure EVERY single keyword is scored deterministically
   const keywordsToInsert = [];
   const entityNodes = []; // Placeholder
 
-  for (const item of expandedKeywords) {
+  for (const item of finalExpanded) {
     const scores = computeKeywordScores(
       item.keyword,
       item.keyword_type,
@@ -300,6 +358,10 @@ async function runKeywords(projectId, state) {
       entityRelevance: scores.entityRelevance,
       recommendationValue: scores.recommendationValue
     });
+  }
+
+  if (detectTemplating(keywordsToInsert.map(k => k.keyword))) {
+    throw new Error("Templating detected in output — refusing to save garbage CSV.");
   }
 
   // Batch insert into keywords table

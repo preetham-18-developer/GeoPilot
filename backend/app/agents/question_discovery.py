@@ -320,25 +320,38 @@ def expand_questions_with_ai(
                 res.append(s)
         return res if res else fallbacks
     
-    topics = clean_list(
+    raw_topics = clean_list(
         seed_topics,
         ["career mentorship", "sql training", "job placement support"]
     )
     
-    # Filter out single generic words
     REJECT_WORDS = {
-        'passion', 'helping', 'companies', 'careers',
-        'students', 'platform', 'solutions', 'services',
-        'learning', 'growth', 'support', 'guidance', 'quality'
+        'passion', 'helping', 'companies', 'careers', 'students', 'platform',
+        'solutions', 'services', 'learning', 'growth', 'support', 'guidance',
+        'quality', 'optimization', 'business optimization', 'digital transformation',
+        'operational efficiency', 'professional consulting', 'industry standards'
     }
-    topics = [t for t in topics 
-              if len(t.split()) >= 2 
-              and t.lower() not in REJECT_WORDS]
+
+    def is_generic(topic: str) -> bool:
+        t = topic.lower().strip().rstrip('.')
+        if t in REJECT_WORDS:
+            return True
+        return any(bad in t for bad in ('optimization', 'solution', 'platform'))
+
+    seed_topics_cleaned = [str(t).strip().rstrip('.') for t in raw_topics]
+    topics = [t for t in seed_topics_cleaned if len(t.split()) >= 2 and not is_generic(t)]
+    
+    FALLBACK_TOPICS = [
+        "career mentorship program", 
+        "sql training placement",
+        "tech career guidance"
+    ]
     
     if not topics:
-        topics = ["career mentorship program", 
-                  "sql training placement",
-                  "tech career guidance"]
+        topics = FALLBACK_TOPICS
+        logger.warning(f"[TOPIC-SOURCE] Using FALLBACK topics — profiler returned nothing usable.")
+    else:
+        logger.info(f"[TOPIC-SOURCE] Using REAL seed topics: {topics}")
     
     city = bi.get("city", "")
     if city.lower() in ["unknown", "not_found", "online", ""]:
@@ -422,10 +435,12 @@ Return JSON:
 
         try:
             from langchain_core.messages import SystemMessage, HumanMessage
+            logger.info(f"[AI-CALL-RAW] batch={i}, prompt_topics={batch}")
             response = llm.invoke([
                 SystemMessage(content=system_prompt),
                 HumanMessage(content=user_prompt)
             ])
+            logger.info(f"[AI-CALL-RAW] raw_response={response.content[:2000]}")
             
             resp_text = response.content.strip()
             resp_text = re.sub(r'```json\s*', '', resp_text)
@@ -464,11 +479,31 @@ Return JSON:
                 })
                 
         except Exception as e:
-            logger.error(f"Question batch {i//3+1} failed: {e}")
-            continue
+            logger.error(f"Batch {i//3+1} failed: {e}", exc_info=True)
+            raise  # TEMPORARY: remove silent swallow until we confirm AI calls work end-to-end
     
     logger.info(f"AI expansion: {len(all_questions)} questions")
     return all_questions
+
+from collections import Counter
+
+def detect_templating(rows: List[str], threshold: float = 0.15) -> bool:
+    """Returns True if templating/padding is detected."""
+    if len(rows) < 15:
+        return False
+    bigrams = Counter()
+    for r in rows:
+        words = str(r).lower().split()
+        bigrams.update(zip(words, words[1:]))
+    if not bigrams:
+        return False
+    top_bigram, count = bigrams.most_common(1)[0]
+    ratio = count / len(rows)
+    if ratio > threshold:
+        logger.error(f"[GARBAGE-DETECTED] '{top_bigram}' appears in {ratio:.0%} of rows. "
+                      f"This smells like template padding, not AI generation. Blocking save.")
+        return True
+    return False
 
 def run_question_discovery(state: AgentState) -> Dict[str, Any]:
     logger.info("Running V3 Question Discovery Node (Complete Refactor)...")
@@ -548,6 +583,9 @@ def run_question_discovery(state: AgentState) -> Dict[str, Any]:
         )
         item.update(scores)
         final_questions.append(item)
+
+    if detect_templating([q["question"] for q in final_questions]):
+        raise ValueError("Templating detected in output — refusing to save garbage CSV.")
 
     logger.info(f"Question Discovery finished. Expanded diverse seeds to {len(final_questions)} questions.")
     return {"questions": final_questions}

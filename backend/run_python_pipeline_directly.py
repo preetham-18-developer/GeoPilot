@@ -13,10 +13,9 @@ from app.core.supabase import _client_ctx
 from supabase import create_client, ClientOptions
 
 async def main():
-    project_id = "0c181b5f-6deb-4789-a2b0-5de992ae8279"
-    run_id = "6536760a-6439-46d3-a9c3-454109036fd7"
-    website_url = "https://www.thelibrarycompany.com"
-    user_id = "00000000-0000-4000-a000-000000000001"
+    project_id = "79e4bb3c-de1f-45a3-899c-9a1dbe36b899"
+    website_url = "https://www.thelibrarycompany.com/"
+    user_id = "f0a29fd8-dc5b-4724-9099-e7e384747daa"
     
     # Create authenticated client to bypass RLS
     client = create_client(
@@ -27,6 +26,15 @@ async def main():
         )
     )
     token = _client_ctx.set(client)
+    
+    import uuid
+    run_id = str(uuid.uuid4())
+    client.table("analysis_runs").insert({
+        "id": run_id,
+        "project_id": project_id,
+        "run_type": "full",
+        "status": "running"
+    }).execute()
     
     print("=== STARTING DIRECT PYTHON PIPELINE RUN ===")
     try:
