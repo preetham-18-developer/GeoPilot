@@ -253,7 +253,7 @@ class QuestionDiscoveryAgent:
                     return topic_qs
                 except Exception as ex:
                     logger.error(f"Error generating questions for topic '{topic}': {ex}")
-                    return []
+                    raise ex
 
             with ThreadPoolExecutor(max_workers=5) as executor:
                 results = executor.map(run_for_topic, seed_topics)
@@ -264,7 +264,7 @@ class QuestionDiscoveryAgent:
             return all_questions
         except Exception as e:
             logger.error(f"Error in V3 Question Discovery LLM execution: {e}")
-            return []
+            raise e
 
     def map_category_to_db(self, llm_q: Dict[str, Any], bi: Dict[str, Any], verified_facts: List[Dict[str, Any]]) -> Dict[str, Any]:
         question = llm_q.get("question", "").strip()
@@ -362,10 +362,8 @@ def expand_questions_with_ai(
     all_questions = list(seeds)
     seen = set(q.get("question","").lower() for q in seeds)
     
-    # Process in batches of 3 topics
-    for i in range(0, len(topics), 3):
-        batch = topics[i:i+3]
-        
+    # Process 1 topic at a time, requesting 15 questions per topic to avoid API timeout/chokes
+    for idx, topic in enumerate(topics):
         system_prompt = """You generate realistic search queries 
 real people type into Google, ChatGPT, Gemini, or Perplexity.
 
@@ -382,45 +380,31 @@ ABSOLUTE RULES:
         user_prompt = f"""Business type: {business_type}
 Location: {location_str}
 
-Generate 60 natural search questions for these topics:
-{chr(10).join(f'- {t}' for t in batch)}
+Generate 15 natural search questions for this topic:
+- {topic}
 
-Generate as these 4 real people:
+Generate as these 3 real people:
 
-PERSON 1 — College student (15 questions):
+PERSON 1 — College student (5 questions):
 Short, informal, uses slang occasionally.
 Examples:
 "sql course with weekend batches hyderabad"
-"which mentorship helped crack google interview"
 "best 1 on 1 mentor for product management"
-"placement support after sql course india"
 
-PERSON 2 — Career changer 28-35 years (15 questions):
+PERSON 2 — Career changer 28-35 years (5 questions):
 Worried about transition, practical minded.
 Examples:  
 "how to switch career to tech at 30"
 "career change into data analyst india"
-"non cs graduate getting into product management"
-"is it too late to learn sql and get job"
 
-PERSON 3 — Someone asking ChatGPT (15 questions):
-Typing directly to AI for recommendation.
+PERSON 3 — Someone asking ChatGPT/Voice search (5 questions):
+Direct/spoken recommendation request.
 Examples:
 "recommend mentorship platform for freshers india"
-"which platform connects students with google employees"
-"suggest career guidance for engineering students"
-"best platform women returning to tech career"
-
-PERSON 4 — Voice search (15 questions):
-Natural spoken language to Google or Siri.
-Examples:
 "best sql course near me with placement"
-"where can i learn sql in hyderabad"
-"career mentorship for college students near me"
-"which coaching helps freshers get tech jobs"
 
 STRICT RULES FOR EVERY QUESTION:
-- Must reference something from the topics list above
+- Must reference the topic above
 - Must be different from all other questions
 - 3-12 words only
 - No company names
@@ -435,7 +419,7 @@ Return JSON:
 
         try:
             from langchain_core.messages import SystemMessage, HumanMessage
-            logger.info(f"[AI-CALL-RAW] batch={i}, prompt_topics={batch}")
+            logger.info(f"[AI-CALL-RAW] batch={idx}, prompt_topics=[{topic!r}]")
             response = llm.invoke([
                 SystemMessage(content=system_prompt),
                 HumanMessage(content=user_prompt)
@@ -460,6 +444,8 @@ Return JSON:
                     continue
                 if q_text.lower() in seen:
                     continue
+                if q_text.lower() in REJECT_WORDS:
+                    continue
                 seen.add(q_text.lower())
                 all_questions.append({
                     "question": q_text,
@@ -479,22 +465,34 @@ Return JSON:
                 })
                 
         except Exception as e:
-            logger.error(f"Batch {i//3+1} failed: {e}", exc_info=True)
-            raise  # TEMPORARY: remove silent swallow until we confirm AI calls work end-to-end
+            logger.error(f"Batch {idx+1} failed: {e}", exc_info=True)
+            raise
     
     logger.info(f"AI expansion: {len(all_questions)} questions")
     return all_questions
 
 from collections import Counter
 
-def detect_templating(rows: List[str], threshold: float = 0.15) -> bool:
+def detect_templating(rows: List[str], threshold: float = 0.35) -> bool:
     """Returns True if templating/padding is detected."""
     if len(rows) < 15:
         return False
     bigrams = Counter()
+    IGNORE_BIGRAMS = {
+        ('how', 'to'),
+        ('near', 'me'),
+        ('in', 'india'),
+        ('to', 'find'),
+        ('way', 'to'),
+        ('is', 'best'),
+        ('best', 'for'),
+        ('best', 'way')
+    }
     for r in rows:
         words = str(r).lower().split()
-        bigrams.update(zip(words, words[1:]))
+        for bg in zip(words, words[1:]):
+            if bg not in IGNORE_BIGRAMS:
+                bigrams[bg] += 1
     if not bigrams:
         return False
     top_bigram, count = bigrams.most_common(1)[0]

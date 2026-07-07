@@ -1091,12 +1091,13 @@ def get_llm():
     if not nvidia_key or nvidia_key == "mock_key":
         raise ValueError("NVIDIA_API_KEY is not configured or is set to 'mock_key'. NVIDIA is required.")
 
-    logger.info("Initializing NVIDIA LLM...")
+    logger.info("Initializing NVIDIA LLM with request_timeout=300.0 and max_retries=0...")
     return ChatOpenAI(
         model=os.getenv("NVIDIA_MODEL", "meta/llama-3.3-70b-instruct"),
         api_key=nvidia_key,
         base_url=os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1"),
         temperature=0.1,
-        max_retries=2
+        max_retries=0,
+        request_timeout=300.0
     )
 

@@ -123,6 +123,17 @@ class ErrorClassifier:
             "retryable": retryable
         }
 
+        # CLASSIFY-DEBUG — log every classification decision so we can verify which rule
+        # actually matched during a real pipeline run. Remove this once the classifier
+        # theory is confirmed or disproven.
+        logger.error(
+            f"[CLASSIFY-DEBUG] "
+            f"agent={agent_name} "
+            f"matched_rule={error_type} "
+            f"retryable={retryable} "
+            f"raw_exception_message={str(exception)!r}"
+        )
+
         try:
             supabase_client.table("error_diagnostics").insert(diagnostic_report).execute()
             logger.info(f"Persisted error diagnostic report for {agent_name} under run {run_id}.")
