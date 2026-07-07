@@ -249,20 +249,24 @@ def run_keyword_intelligence(state: AgentState) -> Dict[str, Any]:
         and str(t).lower() not in REJECT_SINGLES
     ]
     
-    FALLBACK_TOPICS = [
-        "career mentorship program",
-        "sql training placement", 
-        "tech job guidance"
-    ]
-    
+    industry_lower = bi.get("industry", "education platform").lower()
+    if any(w in industry_lower for w in ["restaurant", "food", "dining", "delivery", "cafe"]):
+        fallback_topics = ["online food delivery", "order food near me", "best restaurants nearby"]
+    elif any(w in industry_lower for w in ["saas", "software", "cloud", "crm"]):
+        fallback_topics = ["business cloud software", "crm software solutions", "saas tools online"]
+    elif any(w in industry_lower for w in ["mentor", "education", "training", "edtech", "ed-tech"]):
+        fallback_topics = ["career mentorship program", "sql training placement", "tech job guidance"]
+    else:
+        fallback_topics = ["local business services", "professional consulting", "online product ordering"]
+        
     topics_from_query = clean_list(pre_query.get("industry_topics", []))
     topics_from_query_cleaned = [str(t).strip().rstrip('.') for t in topics_from_query]
     
     topics = topics_from_query_cleaned or valid_seed_topics
     
     if not topics:
-        topics = FALLBACK_TOPICS
-        logger.warning(f"[TOPIC-SOURCE] Using FALLBACK topics — profiler returned nothing usable.")
+        topics = fallback_topics
+        logger.warning(f"[TOPIC-SOURCE] Using DYNAMIC FALLBACK topics for industry {industry_lower}: {topics}")
     else:
         logger.info(f"[TOPIC-SOURCE] Using REAL seed topics: {topics}")
         
