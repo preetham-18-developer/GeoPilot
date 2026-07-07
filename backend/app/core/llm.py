@@ -1093,7 +1093,7 @@ def get_llm():
 
     logger.info("Initializing NVIDIA LLM with request_timeout=300.0 and max_retries=0...")
     return ChatOpenAI(
-        model=os.getenv("NVIDIA_MODEL", "meta/llama-3.3-70b-instruct"),
+        model=os.getenv("NVIDIA_MODEL", "meta/llama-3.1-8b-instruct"),
         api_key=nvidia_key,
         base_url=os.getenv("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1"),
         temperature=0.1,
