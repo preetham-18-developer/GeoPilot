@@ -34,15 +34,24 @@ class RunOut(BaseModel):
 async def execute_bg_analysis(project_id: str, run_id: str, website_url: str):
     """Background task orchestrating crawler spider and agent pipeline."""
     try:
-        # Step 0: Clean up previous web_pages data for this project
-        logger.info(f"Cleaning up previous web_pages for project {project_id}...")
-        try:
-            supabase_client.table("web_pages").delete().eq("project_id", project_id).execute()
-        except Exception as e:
-            logger.warning(f"web_pages cleanup warning: {e}")
-        
-        # Step 1: Run Crawler
-        logger.info(f"Triggering asynchronous crawl for project {project_id}...")
+        # Step 0: Clean up previous data for this project to ensure fresh run is not bypassed by idempotency
+        logger.info(f"Cleaning up previous run data for project {project_id}...")
+        tables_to_clear = [
+            "web_pages", 
+            "questions", 
+            "keywords", 
+            "business_profiles", 
+            "competitors", 
+            "reports", 
+            "execution_checkpoints", 
+            "fallback_reports"
+        ]
+        for table in tables_to_clear:
+            try:
+                supabase_client.table(table).delete().eq("project_id", project_id).execute()
+                logger.info(f"Cleared table {table} for project {project_id}")
+            except Exception as e:
+                logger.warning(f"{table} cleanup warning: {e}")
         
         # Update run & project status to 'crawling'
         supabase_client.table("analysis_runs").update({
