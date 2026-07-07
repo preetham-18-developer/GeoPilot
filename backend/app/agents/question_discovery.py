@@ -323,16 +323,12 @@ def expand_questions_with_ai(
     industry_lower = bi.get("industry", "education platform").lower()
     if any(w in industry_lower for w in ["restaurant", "food", "dining", "delivery", "cafe"]):
         default_seeds = ["online food delivery", "order food near me", "best restaurants nearby"]
-        fallback_topics = ["online food delivery", "order food near me", "best restaurants nearby"]
     elif any(w in industry_lower for w in ["saas", "software", "cloud", "crm"]):
         default_seeds = ["business cloud software", "crm software solutions", "saas tools online"]
-        fallback_topics = ["business cloud software", "crm software solutions", "saas tools online"]
     elif any(w in industry_lower for w in ["mentor", "education", "training", "edtech", "ed-tech"]):
         default_seeds = ["career mentorship", "sql training", "job placement support"]
-        fallback_topics = ["career mentorship program", "sql training placement", "tech career guidance"]
     else:
         default_seeds = ["local business services", "professional consulting", "online product ordering"]
-        fallback_topics = ["local business services", "professional consulting", "online product ordering"]
 
     raw_topics = clean_list(
         seed_topics,
@@ -353,11 +349,15 @@ def expand_questions_with_ai(
         return any(bad in t for bad in ('optimization', 'solution', 'platform'))
 
     seed_topics_cleaned = [str(t).strip().rstrip('.') for t in raw_topics]
-    topics = [t for t in seed_topics_cleaned if len(t.split()) >= 2 and not is_generic(t)]
+    
+    def count_words(topic: str) -> int:
+        norm = topic.replace("-", " ").replace("_", " ").replace("/", " ")
+        return len(norm.split())
+
+    topics = [t for t in seed_topics_cleaned if count_words(t) >= 2 and not is_generic(t)]
     
     if not topics:
-        topics = fallback_topics
-        logger.warning(f"[TOPIC-SOURCE] Using DYNAMIC FALLBACK topics for industry {industry_lower}: {topics}")
+        raise ValueError("Insufficient content or failed topic extraction. Could not extract valid seed topics for project.")
     else:
         logger.info(f"[TOPIC-SOURCE] Using REAL seed topics: {topics}")
     

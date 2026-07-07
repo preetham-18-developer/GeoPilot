@@ -100,12 +100,9 @@ class FallbackEngine:
         except Exception as e:
             logger.warning(f"Failed to fetch details for dynamic fallback: {e}")
 
-        # Ensure seed_topics contains default topics if empty
+        # Ensure seed_topics contains default topics if empty (otherwise fail loud)
         if not seed_topics:
-            if "mentor" in industry.lower() or "ed-tech" in industry.lower() or "education" in industry.lower():
-                seed_topics = ["career mentorship", "programming courses", "tech placements", "1-on-1 coaching", "skills training"]
-            else:
-                seed_topics = ["business optimization", "professional consulting", "digital transformation", "operational efficiency", "industry standards"]
+            raise ValueError("Insufficient content or failed topic extraction. Could not extract valid seed topics for project.")
 
         # Return appropriate defaults to keep state typing valid
         name_lower = agent_name.lower()

@@ -58,8 +58,9 @@ def validate_and_clean_profile(profile: dict, url: str, crawled_content: str) ->
             if not isinstance(t, str):
                 continue
             t_clean = t.strip()
-            # Rules: 2 words minimum, exclude the generic words
-            words = t_clean.lower().split()
+            # Normalize separators (hyphens, underscores, slashes) to spaces for validation
+            t_normalized = t_clean.replace("-", " ").replace("_", " ").replace("/", " ")
+            words = t_normalized.lower().split()
             if len(words) < 2:
                 continue
             if any(bad in words for bad in ['passion', 'helping', 'companies', 'students', 'careers']):
@@ -67,27 +68,28 @@ def validate_and_clean_profile(profile: dict, url: str, crawled_content: str) ->
             cleaned_topics.append(t_clean)
         profile['seed_topics'] = cleaned_topics
 
-    # If seed_topics is empty, create basic ones from content
+    # If seed_topics is empty, try to populate from pre_query_discovery
     if not profile.get('seed_topics') or not isinstance(profile.get('seed_topics'), list) or len(profile.get('seed_topics')) == 0:
         if 'pre_query_discovery' in profile and isinstance(profile['pre_query_discovery'], dict) and profile['pre_query_discovery'].get('industry_topics'):
             profile['seed_topics'] = profile['pre_query_discovery']['industry_topics']
         else:
-            words = crawled_content.lower().split()
-            stopwords = {
-                'the','a','an','is','are','was','were',
-                'be','been','being','have','has','had',
-                'do','does','did','will','would','could',
-                'should','may','might','shall','can',
-                'to','of','in','for','on','with','at',
-                'by','from','as','into','through','during',
-                'and','or','but','if','then','that','this'
-            }
-            meaningful = [w for w in words if w not in stopwords and len(w) > 4]
+            profile['seed_topics'] = []
             
-            from collections import Counter
-            freq = Counter(meaningful)
-            top_words = [word for word, count in freq.most_common(20) if count > 1]
-            profile['seed_topics'] = [w for w in top_words[:15] if w not in ['passion', 'helping', 'companies', 'students', 'careers']]
+    # Clean again to ensure all items in seed_topics are 2+ words and not generic
+    if isinstance(profile.get('seed_topics'), list):
+        cleaned_topics = []
+        for t in profile['seed_topics']:
+            if not isinstance(t, str):
+                continue
+            t_clean = t.strip()
+            t_normalized = t_clean.replace("-", " ").replace("_", " ").replace("/", " ")
+            words = t_normalized.lower().split()
+            if len(words) < 2:
+                continue
+            if any(bad in words for bad in ['passion', 'helping', 'companies', 'students', 'careers']):
+                continue
+            cleaned_topics.append(t_clean)
+        profile['seed_topics'] = cleaned_topics
             
     # Normalize pre_query_discovery topics
     if 'pre_query_discovery' not in profile or not isinstance(profile['pre_query_discovery'], dict):
